@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const path = require("path");
+const cors = require("cors");
 const {
   getVideo,
   getOrCreateProgress,
@@ -8,14 +9,12 @@ const {
   markWaitFinished,
   markBonusAd,
 } = require("./db");
-const cors = require("cors");
+
 const app = express();
-app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+
 app.use(cors());
 app.use(express.json());
-
-
+app.use(express.static(path.join(__dirname, "public")));
 
 // ফলব্যাক ডেমো ডাটা (যখন DB তে ভিডিও পাওয়া যাবে না)
 const DEMO_VIDEO = {
@@ -28,7 +27,7 @@ const DEMO_VIDEO = {
 
 function progressPayload(progress, video) {
   const payload = {
-    ads_watched: progress ? progress.ads_watched : 0,
+    ads_watched: progress ? Number(progress.ads_watched) : 0,
     unlocked: progress ? Boolean(progress.unlocked) : false,
   };
   if (payload.unlocked) payload.video_url = video.video_url;
@@ -36,73 +35,93 @@ function progressPayload(progress, video) {
 }
 
 // ১. ভিডিওর তথ্য পাঠানোর API
-app.get("/api/video/:id", (req, res) => {
-  const video = getVideo(req.params.id);
+app.get("/api/video/:id", async (req, res) => {
+  try {
+    const video = await getVideo(req.params.id);
 
-  if (video) {
-    // ✅ ডাটাবেজের ডায়নামিক ভিডিও
+    if (video) {
+      // ✅ ডাটাবেজের ডায়নামিক ভিডিও
+      return res.json({
+        id: video.id,
+        title: video.title,
+        thumbnail_url: video.thumbnail_url,
+        wait_seconds: video.wait_seconds || 15,
+      });
+    }
+
+    // ⚠️ DB তে ডাটা না থাকলে ফলব্যাক ডেমো ডাটা
     return res.json({
-      id: video.id,
-      title: video.title,
-      thumbnail_url: video.thumbnail_url,
-      wait_seconds: video.wait_seconds || 15,
+      id: DEMO_VIDEO.id,
+      title: DEMO_VIDEO.title,
+      thumbnail_url: DEMO_VIDEO.thumbnail_url,
+      wait_seconds: DEMO_VIDEO.wait_seconds,
     });
+  } catch (err) {
+    console.error("API /video error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
   }
-
-  // ⚠️ DB তে ডাটা না থাকলে ফলব্যাক ডেমো ডাটা
-  return res.json({
-    id: DEMO_VIDEO.id,
-    title: DEMO_VIDEO.title,
-    thumbnail_url: DEMO_VIDEO.thumbnail_url,
-    wait_seconds: DEMO_VIDEO.wait_seconds,
-  });
 });
 
-// ২. യൂজারের প্রোগ্রেস চেক করার API
-app.get("/api/progress/:id", (req, res) => {
-  const userId = req.query.user_id || 123456;
-  const video = getVideo(req.params.id) || DEMO_VIDEO;
+// ২. ইউজারের প্রোগ্রেস চেক করার API
+app.get("/api/progress/:id", async (req, res) => {
+  try {
+    const userId = req.query.user_id || 123456;
+    const video = (await getVideo(req.params.id)) || DEMO_VIDEO;
 
-  if (video.id === "demo") {
-    return res.json({ ads_watched: 0, unlocked: false });
+    if (video.id === "demo") {
+      return res.json({ ads_watched: 0, unlocked: false });
+    }
+
+    const progress = await getOrCreateProgress(Number(userId), req.params.id);
+    res.json(progressPayload(progress, video));
+  } catch (err) {
+    console.error("API /progress error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
   }
-
-  const progress = getOrCreateProgress(Number(userId), req.params.id);
-  res.json(progressPayload(progress, video));
 });
 
 // ৩. Skip Wait (অ্যাড দেখে আনলক) API
-app.post("/api/skip-wait/:id", (req, res) => {
-  const userId = req.body.user_id || 123456;
-  const video = getVideo(req.params.id) || DEMO_VIDEO;
+app.post("/api/skip-wait/:id", async (req, res) => {
+  try {
+    const userId = req.body.user_id || 123456;
+    const video = (await getVideo(req.params.id)) || DEMO_VIDEO;
 
-  if (video.id === "demo") {
-    return res.json({ unlocked: true, video_url: DEMO_VIDEO.video_url });
+    if (video.id === "demo") {
+      return res.json({ unlocked: true, video_url: DEMO_VIDEO.video_url });
+    }
+
+    const progress = await markAdWatched(Number(userId), req.params.id);
+    res.json(progressPayload(progress, video));
+  } catch (err) {
+    console.error("API /skip-wait error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
   }
-
-  const progress = markAdWatched(Number(userId), req.params.id);
-  res.json(progressPayload(progress, video));
 });
 
 // ৪. টাইমার শেষ হলে আনলক করার API
-app.post("/api/wait-finished/:id", (req, res) => {
-  const userId = req.body.user_id || 123456;
-  const video = getVideo(req.params.id) || DEMO_VIDEO;
+app.post("/api/wait-finished/:id", async (req, res) => {
+  try {
+    const userId = req.body.user_id || 123456;
+    const video = (await getVideo(req.params.id)) || DEMO_VIDEO;
 
-  if (video.id === "demo") {
-    return res.json({ unlocked: true, video_url: DEMO_VIDEO.video_url });
+    if (video.id === "demo") {
+      return res.json({ unlocked: true, video_url: DEMO_VIDEO.video_url });
+    }
+
+    const progress = await markWaitFinished(Number(userId), req.params.id);
+    res.json(progressPayload(progress, video));
+  } catch (err) {
+    console.error("API /wait-finished error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
   }
-
-  const progress = markWaitFinished(Number(userId), req.params.id);
-  res.json(progressPayload(progress, video));
 });
 
 // ৫. বোনাস সাপোর্ট অ্যাড API
-app.post("/api/bonus-ad/:id", (req, res) => {
+app.post("/api/bonus-ad/:id", async (req, res) => {
   const userId = req.body.user_id || 123456;
   try {
     if (req.params.id !== "demo") {
-      markBonusAd(Number(userId), req.params.id);
+      await markBonusAd(Number(userId), req.params.id);
     }
     res.json({ ok: true });
   } catch (e) {

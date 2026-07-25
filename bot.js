@@ -1,4 +1,4 @@
-// bot.py এর Node.js ভার্সন - অ্যাডমিন প্রাইভেটে /addvideo দিলে ধাপে ধাপে
+// bot.js - অ্যাডমিন প্রাইভেটে /addvideo দিলে ধাপে ধাপে
 // টাইটেল/থাম্বনেইল/ভিডিও URL নিয়ে ডাটাবেজে সেভ করে এবং চ্যানেলে অটো-পোস্ট করে
 
 require("dotenv").config();
@@ -60,25 +60,38 @@ bot.on("message", async (msg) => {
   if (state.step === "video") {
     state.videoUrl = msg.text.trim();
 
-    const videoId = addVideo({
-      title: state.title,
-      thumbnailUrl: state.thumbnailUrl,
-      videoUrl: state.videoUrl,
-    });
+    try {
+      // 1️⃣ এখানে await ব্যবহার করতে হবে (PostgreSQL Async Support)
+      const videoId = await addVideo({
+        title: state.title,
+        thumbnailUrl: state.thumbnailUrl,
+        videoUrl: state.videoUrl,
+      });
 
-    await postToChannel(videoId);
+      await postToChannel(videoId);
 
-    bot.sendMessage(
-      msg.chat.id,
-      `✅ ভিডিও যোগ হয়েছে এবং চ্যানেলে পোস্ট হয়ে গেছে!\nVideo ID: \`${videoId}\``,
-      { parse_mode: "Markdown" }
-    );
+      bot.sendMessage(
+        msg.chat.id,
+        `✅ ভিডিও যোগ হয়েছে এবং চ্যানেলে পোস্ট হয়ে গেছে!\nVideo ID: \`${videoId}\``,
+        { parse_mode: "Markdown" }
+      );
+    } catch (error) {
+      console.error("Error adding video:", error);
+      bot.sendMessage(msg.chat.id, "❌ ভিডিও সেভ করতে সমস্যা হয়েছে।");
+    }
+
     delete userState[userId];
   }
 });
 
 async function postToChannel(videoId) {
-  const video = getVideo(videoId);
+  // 2️⃣ এখানেও await ব্যবহার করতে হবে
+  const video = await getVideo(videoId);
+  if (!video) {
+    console.error("Video not found for ID:", videoId);
+    return;
+  }
+
   const directWebAppUrl = `https://t.me/norrcartonbot/noor?startapp=${videoId}`;
 
   const messageText =
@@ -87,7 +100,6 @@ async function postToChannel(videoId) {
     `👇 অ্যাড দেখলে সাথে সাথে খুলে যাবে`;
 
   try {
-    // sendPhoto এর বদলে sendMessage
     await bot.sendMessage(CHANNEL_ID, messageText, {
       parse_mode: "Markdown",
       reply_markup: {

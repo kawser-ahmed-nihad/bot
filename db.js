@@ -1,98 +1,127 @@
-// db.js - SQLite ডাটাবেজ (server.js এবং bot.js দুইটাই এটা ব্যবহার করবে)
-const Database = require("better-sqlite3");
-const path = require("path");
+// db.js - PostgreSQL ডাটাবেজ কনফিগারেশন
+const { Pool } = require("pg");
 const crypto = require("crypto");
+require("dotenv").config();
 
-const db = new Database(path.join(__dirname, "data", "videos.db"));
+// Render / External PG Connection Pool
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
+});
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS videos (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    thumbnail_url TEXT,
-    video_url TEXT NOT NULL,
-    wait_seconds INTEGER DEFAULT 45,
-    views INTEGER DEFAULT 0,
-    ad_views INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
+// ১. ডাটাবেজে টেবিল তৈরি করার ফাংশন
+async function initDb() {
+  const queryText = `
+    CREATE TABLE IF NOT EXISTS videos (
+      id VARCHAR(50) PRIMARY KEY,
+      title TEXT NOT NULL,
+      thumbnail_url TEXT,
+      video_url TEXT NOT NULL,
+      wait_seconds INTEGER DEFAULT 45,
+      views INTEGER DEFAULT 0,
+      ad_views INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
 
-  CREATE TABLE IF NOT EXISTS progress (
-    user_id INTEGER NOT NULL,
-    video_id TEXT NOT NULL,
-    ads_watched INTEGER DEFAULT 0,
-    unlocked INTEGER DEFAULT 0,
-    PRIMARY KEY (user_id, video_id)
-  );
-`);
+    CREATE TABLE IF NOT EXISTS progress (
+      user_id BIGINT NOT NULL,
+      video_id VARCHAR(50) NOT NULL,
+      ads_watched INTEGER DEFAULT 0,
+      unlocked INTEGER DEFAULT 0,
+      PRIMARY KEY (user_id, video_id)
+    );
+  `;
+  try {
+    await pool.query(queryText);
+    console.log("✅ PostgreSQL টেবিলসমূহ সফলভাবে প্রস্তুত হয়েছে।");
+  } catch (err) {
+    console.error("❌ টেবিল তৈরিতে সমস্যা হয়েছে:", err);
+  }
+}
 
-function addVideo({ title, thumbnailUrl, videoUrl, waitSeconds = 45 }) {
+// অ্যাপ রান হওয়ার সাথে সাথে টেবিলগুলো চেক/তৈরি করবে
+initDb();
+
+// ২. ভিডিও যোগ করা
+async function addVideo({ title, thumbnailUrl, videoUrl, waitSeconds = 45 }) {
   const id = crypto.randomBytes(5).toString("hex");
-  db.prepare(
-    `INSERT INTO videos (id, title, thumbnail_url, video_url, wait_seconds) VALUES (?, ?, ?, ?, ?)`
-  ).run(id, title, thumbnailUrl, videoUrl, waitSeconds);
-  return id;
+  const text = `
+    INSERT INTO videos (id, title, thumbnail_url, video_url, wait_seconds) 
+    VALUES ($1, $2, $3, $4, $5) 
+    RETURNING id;
+  `;
+  const values = [id, title, thumbnailUrl, videoUrl, waitSeconds];
+  const res = await pool.query(text, values);
+  return res.rows[0].id;
 }
 
-function getVideo(id) {
-  return db.prepare(`SELECT * FROM videos WHERE id = ?`).get(id);
+// ৩. ভিডিওর তথ্য নেওয়া
+async function getVideo(id) {
+  const text = `SELECT * FROM videos WHERE id = $1`;
+  const res = await pool.query(text, [id]);
+  return res.rows[0] || null;
 }
 
-function getOrCreateProgress(userId, videoId) {
-  let row = db
-    .prepare(`SELECT * FROM progress WHERE user_id = ? AND video_id = ?`)
-    .get(userId, videoId);
-  if (!row) {
-    db.prepare(
-      `INSERT INTO progress (user_id, video_id, ads_watched, unlocked) VALUES (?, ?, 0, 0)`
-    ).run(userId, videoId);
-    row = db
-      .prepare(`SELECT * FROM progress WHERE user_id = ? AND video_id = ?`)
-      .get(userId, videoId);
-  }
-  return row;
+// ৪. ইউজার প্রোগ্রেস চেক/তৈরি করা (ON CONFLICT ব্যবহার করে সহজে)
+async function getOrCreateProgress(userId, videoId) {
+  const text = `
+    INSERT INTO progress (user_id, video_id, ads_watched, unlocked) 
+    VALUES ($1, $2, 0, 0)
+    ON CONFLICT (user_id, video_id) DO UPDATE SET user_id = EXCLUDED.user_id
+    RETURNING *;
+  `;
+  const res = await pool.query(text, [userId, videoId]);
+  return res.rows[0];
 }
 
-function markAdWatched(userId, videoId) {
-  const progress = getOrCreateProgress(userId, videoId);
-  const video = getVideo(videoId);
+// ৫. স্কিপ অ্যাড দেখে আনলক করা
+async function markAdWatched(userId, videoId) {
+  const progress = await getOrCreateProgress(userId, videoId);
 
-  const adsWatched = progress.ads_watched + 1;
-  const unlocked = 1;
-
-  db.prepare(
-    `UPDATE progress SET ads_watched = ?, unlocked = ? WHERE user_id = ? AND video_id = ?`
-  ).run(adsWatched, unlocked, userId, videoId);
+  const updateProgressText = `
+    UPDATE progress 
+    SET ads_watched = ads_watched + 1, unlocked = 1 
+    WHERE user_id = $1 AND video_id = $2 
+    RETURNING *;
+  `;
+  const res = await pool.query(updateProgressText, [userId, videoId]);
 
   if (!progress.unlocked) {
-    db.prepare(`UPDATE videos SET views = views + 1 WHERE id = ?`).run(videoId);
+    await pool.query(`UPDATE videos SET views = views + 1 WHERE id = $1`, [videoId]);
   }
-  db.prepare(`UPDATE videos SET ad_views = ad_views + 1 WHERE id = ?`).run(videoId);
+  await pool.query(`UPDATE videos SET ad_views = ad_views + 1 WHERE id = $1`, [videoId]);
 
-  return getOrCreateProgress(userId, videoId);
+  return res.rows[0];
 }
 
-function markWaitFinished(userId, videoId) {
-  const progress = getOrCreateProgress(userId, videoId);
+// ৬. টাইমার শেষ হলে আনলক করা
+async function markWaitFinished(userId, videoId) {
+  const progress = await getOrCreateProgress(userId, videoId);
+
   if (!progress.unlocked) {
-    db.prepare(
-      `UPDATE progress SET unlocked = 1 WHERE user_id = ? AND video_id = ?`
-    ).run(userId, videoId);
-    db.prepare(`UPDATE videos SET views = views + 1 WHERE id = ?`).run(videoId);
+    await pool.query(
+      `UPDATE progress SET unlocked = 1 WHERE user_id = $1 AND video_id = $2`,
+      [userId, videoId]
+    );
+    await pool.query(`UPDATE videos SET views = views + 1 WHERE id = $1`, [videoId]);
   }
-  return getOrCreateProgress(userId, videoId);
+
+  return await getOrCreateProgress(userId, videoId);
 }
 
-function markBonusAd(userId, videoId) {
-  db.prepare(
-    `UPDATE progress SET ads_watched = ads_watched + 1 WHERE user_id = ? AND video_id = ?`
-  ).run(userId, videoId);
-  db.prepare(`UPDATE videos SET ad_views = ad_views + 1 WHERE id = ?`).run(videoId);
-  return getOrCreateProgress(userId, videoId);
+// ৭. বোনাস অ্যাড দেখা
+async function markBonusAd(userId, videoId) {
+  await pool.query(
+    `UPDATE progress SET ads_watched = ads_watched + 1 WHERE user_id = $1 AND video_id = $2`,
+    [userId, videoId]
+  );
+  await pool.query(`UPDATE videos SET ad_views = ad_views + 1 WHERE id = $1`, [videoId]);
+
+  return await getOrCreateProgress(userId, videoId);
 }
 
 module.exports = {
-  db,
+  pool,
   addVideo,
   getVideo,
   getOrCreateProgress,
