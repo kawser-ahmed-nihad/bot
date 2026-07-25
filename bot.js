@@ -30,8 +30,8 @@ function isAdmin(userId) {
 
 bot.onText(/\/addvideo/, (msg) => {
   const userId = msg.from.id;
-  console.log("তোমার Telegram ID:", userId);
-  console.log("ADMIN_IDS এ যা আছে:", ADMIN_IDS);
+  // console.log("তোমার Telegram ID:", userId);
+  // console.log("ADMIN_IDS এ যা আছে:", ADMIN_IDS);
   if (!isAdmin(userId)) {
     bot.sendMessage(msg.chat.id, "❌ তুমি এই কমান্ড ব্যবহার করার অনুমতিপ্রাপ্ত না।");
     return;
