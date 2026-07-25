@@ -2,7 +2,10 @@
 // টাইটেল/থাম্বনেইল/ভিডিও URL নিয়ে ডাটাবেজে সেভ করে এবং চ্যানেলে অটো-পোস্ট করে
 
 require("dotenv").config();
-const TelegramBot = require("node-telegram-bot-api");
+const TelegramBotModule = require("node-telegram-bot-api");
+// CJS/ESM কম্প্যাটিবিলিটি ফিক্স (Render Node v24 environment এর জন্য)
+const TelegramBot = TelegramBotModule.default || TelegramBotModule;
+
 const { addVideo, getVideo } = require("./db");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -14,7 +17,7 @@ const ADMIN_IDS = (process.env.ADMIN_IDS || "")
   .filter(Boolean);
 
 if (!BOT_TOKEN) {
-  console.error("❌ .env ফাইলে BOT TOKEN বসাও।");
+  console.error("❌ .env ফাইলে BOT_TOKEN বসাও।");
   process.exit(1);
 }
 
@@ -61,7 +64,7 @@ bot.on("message", async (msg) => {
     state.videoUrl = msg.text.trim();
 
     try {
-      // 1️⃣ এখানে await ব্যবহার করতে হবে (PostgreSQL Async Support)
+      // PostgreSQL Async Support
       const videoId = await addVideo({
         title: state.title,
         thumbnailUrl: state.thumbnailUrl,
@@ -77,7 +80,7 @@ bot.on("message", async (msg) => {
       );
     } catch (error) {
       console.error("Error adding video:", error);
-      bot.sendMessage(msg.chat.id, "❌ ভিডিও সেভ করতে সমস্যা হয়েছে।");
+      bot.sendMessage(msg.chat.id, "❌ ভিডিও সেভ করতে সমস্যা হয়েছে।");
     }
 
     delete userState[userId];
@@ -85,7 +88,6 @@ bot.on("message", async (msg) => {
 });
 
 async function postToChannel(videoId) {
-  // 2️⃣ এখানেও await ব্যবহার করতে হবে
   const video = await getVideo(videoId);
   if (!video) {
     console.error("Video not found for ID:", videoId);
