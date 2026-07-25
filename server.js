@@ -35,16 +35,18 @@ function progressPayload(progress, video) {
 }
 
 // ১. ভিডিওর তথ্য পাঠানোর API
+// ১. ভিডিওর তথ্য পাঠানোর API
 app.get("/api/video/:id", async (req, res) => {
   try {
     const video = await getVideo(req.params.id);
 
     if (video) {
-      // ✅ ডাটাবেজের ডায়নামিক ভিডিও
+      // ✅ ডাটাবেজের ডায়নামিক ভিডিও (video_url সহ)
       return res.json({
         id: video.id,
         title: video.title,
         thumbnail_url: video.thumbnail_url,
+        video_url: video.video_url, // 👈 এই লাইনটি যোগ করা হয়েছে
         wait_seconds: video.wait_seconds || 15,
       });
     }
@@ -54,6 +56,7 @@ app.get("/api/video/:id", async (req, res) => {
       id: DEMO_VIDEO.id,
       title: DEMO_VIDEO.title,
       thumbnail_url: DEMO_VIDEO.thumbnail_url,
+      video_url: DEMO_VIDEO.video_url,
       wait_seconds: DEMO_VIDEO.wait_seconds,
     });
   } catch (err) {
