@@ -14,7 +14,7 @@ const ADMIN_IDS = (process.env.ADMIN_IDS || "")
   .filter(Boolean);
 
 if (!BOT_TOKEN) {
-  console.error("❌ .env ফাইলে BOT_TOKEN বসাও।");
+  console.error("❌ .env ফাইলে BOT TOKEN বসাও।");
   process.exit(1);
 }
 
