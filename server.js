@@ -11,7 +11,7 @@ const {
 } = require("./db");
 
 const app = express();
-
+require("./bot"); // 👈 এই লাইনটি যোগ করুন
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
