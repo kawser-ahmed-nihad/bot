@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Media Player</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://sad.adsgram.ai/js/sad.min.js"></script>
+<style>
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif; background:#0f1115; color:#fff; text-align:center; padding:16px; }
+  .thumb { width:100%; max-width:480px; height:240px; object-fit:cover; border-radius:14px; margin-top:12px; }
+  h2 { margin:16px 0 6px; font-size:20px; }
+  .status { color:#9aa0a6; margin-bottom:16px; font-size:14px; }
+  .progress-wrap { width:100%; max-width:480px; height:8px; background:#22242c; border-radius:4px; margin:0 auto 20px; overflow:hidden; }
+  .progress-bar { height:100%; background:linear-gradient(90deg,#6a5cff,#8b7cff); width:0%; transition:width 1s linear; }
+  button { width:100%; max-width:480px; padding:16px; font-size:16px; font-weight:bold; border:none; border-radius:12px; margin:8px 0; cursor:pointer; }
+  .skip-btn { background:linear-gradient(135deg,#ff8a00,#ff5f6d); color:#fff; }
+  .bonus-btn { background:#1c1e26; color:#9aa0a6; border:1px solid #2c2f3a !important; font-size:14px !important; padding:12px !important; }
+  video { width:100%; max-width:480px; border-radius:12px; margin-top:16px; }
+</style>
+</head>
+<body>
+
+<img class="thumb" id="thumb" src="" alt="thumbnail" style="display:none;">
+<h2 id="titleEl">ভিডিও লোড হচ্ছে...</h2>
+<p class="status" id="status">অনুগ্রহ করে অপেক্ষা করুন...</p>
+
+<div class="progress-wrap" id="progressWrap">
+  <div class="progress-bar" id="progressBar"></div>
+</div>
+
+<div id="wait-section"></div>
+<div id="video-section" style="display:none;">
+  <video id="player" controls playsinline autoplay></video>
+  <button class="bonus-btn" id="bonusBtn">🎁 চ্যানেলকে সাপোর্ট করতে একটি অ্যাড দেখুন</button>
+</div>
+
+<script>
+// 🌐 ১. আপনার Express ব্যাকএন্ড সার্ভারের URL লিংক এখানে দিন
+// (যদি ব্যাকএন্ড ও ফ্রন্টএন্ড একই সার্ভারে চলে, তবে এটি ফাঁকা "" রাখতে পারেন)
+// const API_BASE_URL = "https://your-backend-server.onrender.com"; 
+
+// 🌐 বর্তমানে Localhost-এ টেস্ট করার জন্য
+const API_BASE_URL = "http://localhost:3000";
+
+// ২. URL dynamic ID বের করা
+const urlParams = new URLSearchParams(window.location.search);
+const VIDEO_ID = urlParams.get('startapp') || urlParams.get('id') || window.location.pathname.split("/").filter(Boolean).pop() || "demo";
+
+const tg = window.Telegram.WebApp;
+tg.ready();
+tg.expand();
+
+const userId = tg.initDataUnsafe?.user?.id || 12345678;
+
+const thumbEl = document.getElementById("thumb");
+const titleEl = document.getElementById("titleEl");
+const statusEl = document.getElementById("status");
+const progressWrap = document.getElementById("progressWrap");
+const progressBar = document.getElementById("progressBar");
+const waitSection = document.getElementById("wait-section");
+const videoSection = document.getElementById("video-section");
+const player = document.getElementById("player");
+const bonusBtn = document.getElementById("bonusBtn");
+
+// 📌 Adsgram Block ID
+const ADSGRAM_BLOCK_ID = "YOUR_ADSGRAM_BLOCK_ID";
+const AdController = (window.Adsgram && ADSGRAM_BLOCK_ID !== "YOUR_ADSGRAM_BLOCK_ID") 
+  ? window.Adsgram.init({ blockId: ADSGRAM_BLOCK_ID }) 
+  : null;
+
+let WAIT_SECONDS = 15;
+let secondsLeft = WAIT_SECONDS;
+let timerInterval = null;
+
+async function fetchVideoInfo() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/video/${VIDEO_ID}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    console.error("API Error:", e);
+    return null;
+  }
+}
+
+async function fetchProgress() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/progress/${VIDEO_ID}?user_id=${userId}`);
+    if (!res.ok) return { unlocked: false };
+    return await res.json();
+  } catch (e) {
+    return { unlocked: false };
+  }
+}
+
+async function callApi(path) {
+  try {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: userId }),
+    });
+    return await res.json();
+  } catch (e) {
+    return { unlocked: true, video_url: "https://vjs.zencdn.net/v/oceans.mp4" };
+  }
+}
+
+function renderWaitUI() {
+  waitSection.innerHTML = "";
+  progressWrap.style.display = "block";
+  const btn = document.createElement("button");
+  btn.className = "skip-btn";
+  btn.textContent = "⚡ Skip Wait — Watch 1 Ad";
+  btn.onclick = watchSkipAd;
+  waitSection.appendChild(btn);
+  startTimer();
+}
+
+function startTimer() {
+  updateTimerUI();
+  if (timerInterval) clearInterval(timerInterval);
+  timerInterval = setInterval(async () => {
+    secondsLeft -= 1;
+    updateTimerUI();
+    if (secondsLeft <= 0) {
+      clearInterval(timerInterval);
+      const result = await callApi(`/api/wait-finished/${VIDEO_ID}`);
+      if (result.unlocked) renderUnlocked(result.video_url);
+    }
+  }, 1000);
+}
+
+function updateTimerUI() {
+  statusEl.textContent = `🆓 ফ্রি ভিডিও ${secondsLeft} সেকেন্ড পরে খুলবে, অথবা অ্যাড দেখে এখনই দেখুন`;
+  const pct = Math.max(0, ((WAIT_SECONDS - secondsLeft) / WAIT_SECONDS) * 100);
+  progressBar.style.width = pct + "%";
+}
+
+function renderUnlocked(videoUrl) {
+  if (timerInterval) clearInterval(timerInterval);
+  statusEl.textContent = "🎉 ভিডিওটি উপভোগ করুন!";
+  progressWrap.style.display = "none";
+  waitSection.innerHTML = "";
+  videoSection.style.display = "block";
+  if (videoUrl) player.src = videoUrl;
+}
+
+async function watchSkipAd() {
+  if (!AdController) { 
+    const result = await callApi(`/api/skip-wait/${VIDEO_ID}`);
+    if (result.unlocked) renderUnlocked(result.video_url);
+    return; 
+  }
+
+  try {
+    await AdController.show();
+    const result = await callApi(`/api/skip-wait/${VIDEO_ID}`);
+    if (result.unlocked) renderUnlocked(result.video_url);
+  } catch (e) {
+    console.log("Ad cancelled or failed");
+  }
+}
+
+bonusBtn.onclick = async () => {
+  if (!AdController) {
+    await callApi(`/api/bonus-ad/${VIDEO_ID}`);
+    bonusBtn.textContent = "❤️ ধন্যবাদ সাপোর্ট করার জন্য!";
+    bonusBtn.disabled = true;
+    return;
+  }
+  try {
+    await AdController.show();
+    await callApi(`/api/bonus-ad/${VIDEO_ID}`);
+    bonusBtn.textContent = "❤️ ধন্যবাদ সাপোর্ট করার জন্য!";
+    bonusBtn.disabled = true;
+  } catch (e) {}
+};
+
+async function init() {
+  let videoInfo = await fetchVideoInfo();
+  
+  // 💡 ব্যাকএন্ড কাজ না করলেও টেস্ট ডেমো ডাটা দিয়ে পেজ চালু রাখবে
+  if (!videoInfo) {
+    videoInfo = {
+      id: "demo",
+      title: "Sample Video Player",
+      thumbnail_url: "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800&q=80",
+      wait_seconds: 15,
+      video_url: "https://vjs.zencdn.net/v/oceans.mp4"
+    };
+  }
+
+  document.title = videoInfo.title;
+  titleEl.textContent = videoInfo.title;
+  thumbEl.src = videoInfo.thumbnail_url;
+  thumbEl.style.display = "inline-block";
+  WAIT_SECONDS = videoInfo.wait_seconds || 15;
+  secondsLeft = WAIT_SECONDS;
+
+  const progress = await fetchProgress();
+  if (progress && progress.unlocked) {
+    renderUnlocked(progress.video_url || videoInfo.video_url);
+  } else {
+    renderWaitUI();
+  }
+}
+
+init();
+</script>
+</body>
+</html>

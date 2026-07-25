@@ -1,0 +1,31 @@
+services:
+  # ---- Express Mini App (ওয়েব) ----
+  - type: web
+    name: video-webapp
+    env: node
+    buildCommand: "npm install"
+    startCommand: "node server.js"
+    envVars:
+      - key: PORT
+        value: "3000"
+
+  # ---- Admin Bot (ব্যাকগ্রাউন্ড ওয়ার্কার) ----
+  - type: worker
+    name: video-bot
+    env: node
+    buildCommand: "npm install"
+    startCommand: "node bot.js"
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: CHANNEL_ID
+        sync: false
+      - key: WEBAPP_BASE_URL
+        value: "https://video-webapp.onrender.com"
+      - key: ADMIN_IDS
+        sync: false
+
+# ⚠️ গুরুত্বপূর্ণ: এই দুইটা সার্ভিস আলাদা ফাইল সিস্টেমে চলে, তাই SQLite (data/videos.db)
+# শেয়ার হবে না। Render এ ডিপ্লয় করার আগে db.js কে Postgres এ শিফট করা লাগবে
+# (একটা Render Postgres অ্যাড করে DATABASE_URL এনভায়রনমেন্ট ভ্যারিয়েবল দিয়ে)।
+# লোকাল টেস্টিং এ কোনো সমস্যা নেই যেহেতু একই মেশিনে দুটোই চলছে।

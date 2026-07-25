@@ -1,0 +1,17 @@
+{
+  "name": "ad-gated-video-system",
+  "version": "1.0.0",
+  "description": "Telegram channel video unlock system - Express + node-telegram-bot-api",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "bot": "node bot.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}
