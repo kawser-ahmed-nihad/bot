@@ -8,38 +8,37 @@
 <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
 <style>
   body { margin:0; font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif; background:#0f1115; color:#fff; text-align:center; padding:16px; }
-  .thumb { width:100%; max-width:480px; height:240px; object-fit:cover; border-radius:14px; margin-top:12px; }
+  .thumb { width:100%; max-width:480px; height:240px; object-fit:cover; border-radius:14px; margin-top:12px; display:none; }
   h2 { margin:16px 0 6px; font-size:20px; }
   .status { color:#9aa0a6; margin-bottom:16px; font-size:14px; }
-  .progress-wrap { width:100%; max-width:480px; height:8px; background:#22242c; border-radius:4px; margin:0 auto 20px; overflow:hidden; }
-  .progress-bar { height:100%; background:linear-gradient(90deg,#6a5cff,#8b7cff); width:0%; transition:width 1s linear; }
   button, .direct-btn { width:100%; max-width:480px; padding:16px; font-size:16px; font-weight:bold; border:none; border-radius:12px; margin:8px 0; cursor:pointer; box-sizing:border-box; display:inline-block; text-decoration:none; }
-  .skip-btn { background:linear-gradient(135deg,#ff8a00,#ff5f6d); color:#fff; }
   .bonus-btn { background:#1c1e26; color:#9aa0a6; border:1px solid #2c2f3a !important; font-size:14px !important; padding:12px !important; }
-  .direct-btn { background:#28a745; color:#fff; font-size:15px; margin-top:10px; }
-  video { width:100%; max-width:480px; border-radius:12px; margin-top:16px; background:#000; }
-  .error-msg { color:#ff6b6b; font-size:14px; margin-top:10px; display:none; }
+  .error-box { background:#3a1c1c; color:#ff8a8a; border-radius:10px; padding:14px; font-size:14px; margin-top:12px; display:none; }
+
+  .player-box { width:100%; max-width:480px; margin:16px auto 0; position:relative; background:#000; border-radius:12px; overflow:hidden; }
+  video { width:100%; height:auto; display:block; }
 </style>
 </head>
 <body>
 
-<img class="thumb" id="thumb" src="" alt="thumbnail" style="display:none;">
+<img class="thumb" id="thumb" alt="thumbnail">
 <h2 id="titleEl">ভিডিও লোড হচ্ছে...</h2>
 <p class="status" id="status">অনুগ্রহ করে অপেক্ষা করুন...</p>
 
-<div class="progress-wrap" id="progressWrap">
-  <div class="progress-bar" id="progressBar"></div>
-</div>
-
-<div id="wait-section"></div>
 <div id="video-section" style="display:none;">
-  <!-- crossorigin="anonymous" এবং playsinline যোগ করা হয়েছে ভিডিও লোডিং সমস্যা কাটাতে -->
-  <video id="player" controls playsinline autoplay crossorigin="anonymous"></video>
-  
-  <p class="error-msg" id="errorMsg">⚠️ ভিডিওটি সরাসরি ইন-অ্যাপ প্লেয়ারে প্লে হতে সমস্যা করছে।</p>
-  <a id="fallbackBtn" class="direct-btn" href="#" target="_blank" style="display:none;">🌐 ব্রাউজারে বা সরাসরি দেখুন</a>
-  
-  <button class="bonus-btn" id="bonusBtn">🎁 চ্যানেলকে সাপোর্ট করতে একটি অ্যাড দেখুন</button>
+  <div class="player-box">
+    <video id="player" controls playsinline preload="auto" autoplay></video>
+  </div>
+
+  <button class="direct-btn" id="fullscreenBtn" style="background:#3a3f4b;">⛶ ফুল স্ক্রিনে দেখুন</button>
+
+  <div class="error-box" id="errorBox">
+    ⚠️ এই ভিডিওটি এই লিংক থেকে সরাসরি চালানো সম্ভব হচ্ছে না।
+    <br>এই হোস্টিং সার্ভিস সরাসরি প্লে-ব্যাক সাপোর্ট করে না (যেমন Terabox)।
+    <br>ভিডিওটি Cloudflare R2 বা Backblaze B2 তে আপলোড করে লিংক বদলে দিন।
+  </div>
+
+  <button class="bonus-btn" id="bonusBtn">🎁 চ্যানেলকে সাপোর্ট করতে একটি অ্যাড দেখুন (ঐচ্ছিক)</button>
 </div>
 
 <script>
@@ -58,33 +57,51 @@ const userId = tg.initDataUnsafe?.user?.id || 12345678;
 const thumbEl = document.getElementById("thumb");
 const titleEl = document.getElementById("titleEl");
 const statusEl = document.getElementById("status");
-const progressWrap = document.getElementById("progressWrap");
-const progressBar = document.getElementById("progressBar");
-const waitSection = document.getElementById("wait-section");
 const videoSection = document.getElementById("video-section");
 const player = document.getElementById("player");
 const bonusBtn = document.getElementById("bonusBtn");
-const fallbackBtn = document.getElementById("fallbackBtn");
-const errorMsg = document.getElementById("errorMsg");
+const fullscreenBtn = document.getElementById("fullscreenBtn");
+const errorBox = document.getElementById("errorBox");
 
-const ADSGRAM_BLOCK_ID = "YOUR_ADSGRAM_BLOCK_ID";
-const AdController = (window.Adsgram && ADSGRAM_BLOCK_ID !== "YOUR_ADSGRAM_BLOCK_ID") 
-  ? window.Adsgram.init({ blockId: ADSGRAM_BLOCK_ID }) 
+const ADSGRAM_BLOCK_ID = "39750";
+const AdController = (window.Adsgram && ADSGRAM_BLOCK_ID)
+  ? window.Adsgram.init({ blockId: ADSGRAM_BLOCK_ID })
   : null;
 
-let WAIT_SECONDS = 15;
-let secondsLeft = WAIT_SECONDS;
-let timerInterval = null;
 let currentVideoUrl = "";
 
-// 📌 ভিডিও প্লে হতে সমস্যা হলে অটোমেটিক ফলব্যাক বাটন অন করার হ্যান্ডলার
-player.onerror = () => {
-  if (currentVideoUrl) {
-    errorMsg.style.display = "block";
-    fallbackBtn.href = currentVideoUrl;
-    fallbackBtn.style.display = "inline-block";
+// ---------- ভিডিও URL normalize করা (Dropbox/Drive শেয়ার লিংককে direct লিংকে বদলানো) ----------
+function normalizeVideoUrl(url) {
+  if (!url) return url;
+
+  try {
+    const u = new URL(url);
+
+    // Dropbox শেয়ার লিংক -> সরাসরি ফাইল লিংক
+    if (u.hostname.includes("dropbox.com")) {
+      u.hostname = "dl.dropboxusercontent.com";
+      u.searchParams.delete("dl");
+      u.searchParams.set("raw", "1");
+      return u.toString();
+    }
+
+    // Google Drive শেয়ার লিংক -> সরাসরি ডাউনলোড লিংক
+    const gdriveMatch = url.match(/drive\.google\.com\/file\/d\/([^/]+)/);
+    if (gdriveMatch) {
+      return `https://drive.google.com/uc?export=download&id=${gdriveMatch[1]}`;
+    }
+
+    // Terabox - সরাসরি এমবেড সাপোর্ট করে না (auth token/referrer-lock থাকে)
+    // এটা URL রিরাইট দিয়ে ঠিক করা সম্ভব না
+    if (u.hostname.includes("terabox") || u.hostname.includes("1024terabox")) {
+      return null;
+    }
+
+    return url;
+  } catch (e) {
+    return url;
   }
-};
+}
 
 async function fetchVideoInfo() {
   try {
@@ -93,16 +110,6 @@ async function fetchVideoInfo() {
     return await res.json();
   } catch (e) {
     return null;
-  }
-}
-
-async function fetchProgress() {
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/progress/${VIDEO_ID}?user_id=${userId}`);
-    if (!res.ok) return { unlocked: false };
-    return await res.json();
-  } catch (e) {
-    return { unlocked: false };
   }
 }
 
@@ -115,82 +122,63 @@ async function callApi(path) {
     });
     return await res.json();
   } catch (e) {
-    return { unlocked: true, video_url: currentVideoUrl };
+    return {};
   }
 }
 
-function renderWaitUI() {
-  waitSection.innerHTML = "";
-  progressWrap.style.display = "block";
-  const btn = document.createElement("button");
-  btn.className = "skip-btn";
-  btn.textContent = "⚡ Skip Wait — Watch 1 Ad";
-  btn.onclick = watchSkipAd;
-  waitSection.appendChild(btn);
-  startTimer();
-}
-
-function startTimer() {
-  updateTimerUI();
-  if (timerInterval) clearInterval(timerInterval);
-  timerInterval = setInterval(async () => {
-    secondsLeft -= 1;
-    updateTimerUI();
-    if (secondsLeft <= 0) {
-      clearInterval(timerInterval);
-      const result = await callApi(`/api/wait-finished/${VIDEO_ID}`);
-      renderUnlocked(result.video_url || currentVideoUrl);
-    }
-  }, 1000);
-}
-
-function updateTimerUI() {
-  statusEl.textContent = `🆓 ফ্রি ভিডিও ${secondsLeft} সেকেন্ড পরে খুলবে, অথবা অ্যাড দেখে এখনই দেখুন`;
-  const pct = Math.max(0, ((WAIT_SECONDS - secondsLeft) / WAIT_SECONDS) * 100);
-  progressBar.style.width = pct + "%";
-}
-
-function renderUnlocked(videoUrl) {
-  if (timerInterval) clearInterval(timerInterval);
-  statusEl.textContent = "🎉 ভিডিওটি উপভোগ করুন!";
-  progressWrap.style.display = "none";
-  waitSection.innerHTML = "";
+// ---------- ভিডিও সরাসরি চালু করা — কোনো wait বা বাধ্যতামূলক অ্যাড নেই ----------
+function renderVideo(videoUrl) {
   videoSection.style.display = "block";
-  
-  const finalUrl = videoUrl || currentVideoUrl;
-  if (finalUrl) {
-    currentVideoUrl = finalUrl;
-    player.src = finalUrl;
-    player.load();
+  errorBox.style.display = "none";
 
-    // চেষ্টা করবে প্লে করার জন্য
-    const playPromise = player.play();
-    if (playPromise !== undefined) {
-      playPromise.catch(() => {
-        // অটো-প্লে ব্রাউজার ব্লক করলে বা ভিডিও লোড ফেইল হলে অপশন শো করবে
-        fallbackBtn.href = finalUrl;
-        fallbackBtn.style.display = "inline-block";
-      });
-    }
+  const rawUrl = videoUrl || currentVideoUrl;
+  const finalUrl = normalizeVideoUrl(rawUrl);
+
+  if (!finalUrl) {
+    statusEl.textContent = "❌ এই ভিডিও চালানো যাচ্ছে না।";
+    errorBox.style.display = "block";
+    return;
   }
+
+  statusEl.textContent = "🎉 ভিডিওটি উপভোগ করুন!";
+  currentVideoUrl = finalUrl;
+  player.src = finalUrl;
+  player.load();
+
+  player.play().catch(() => {
+    player.muted = true;
+    player.play().catch(() => {
+      // এখানে কিছু করার দরকার নেই, নিচের error listener সঠিক কারণ দেখাবে
+    });
+  });
 }
 
-async function watchSkipAd() {
-  if (!AdController) { 
-    const result = await callApi(`/api/skip-wait/${VIDEO_ID}`);
-    renderUnlocked(result.video_url || currentVideoUrl);
-    return; 
+// ---------- ফুল স্ক্রিন হ্যান্ডলিং (ভিডিও এলিমেন্ট + Telegram Mini App দুটোই) ----------
+fullscreenBtn.onclick = () => {
+  // Telegram এর নিজস্ব Mini App fullscreen (Bot API 8.0+ এ সাপোর্ট করলে পুরো স্ক্রিন নেবে)
+  if (typeof tg.requestFullscreen === "function") {
+    try { tg.requestFullscreen(); } catch (e) {}
   }
 
-  try {
-    await AdController.show();
-    const result = await callApi(`/api/skip-wait/${VIDEO_ID}`);
-    renderUnlocked(result.video_url || currentVideoUrl);
-  } catch (e) {
-    console.log("Ad cancelled");
+  // ভিডিও এলিমেন্টকে ব্রাউজার ফুলস্ক্রিন এপিআই দিয়ে ফুলস্ক্রিন করা (ক্রস-ব্রাউজার ফলব্যাক সহ)
+  if (player.requestFullscreen) {
+    player.requestFullscreen();
+  } else if (player.webkitRequestFullscreen) {
+    player.webkitRequestFullscreen(); // Chrome/Android WebView
+  } else if (player.webkitEnterFullscreen) {
+    player.webkitEnterFullscreen(); // iOS Safari - ভিডিও ট্যাগের নিজস্ব ফুলস্ক্রিন
+  } else if (player.msRequestFullscreen) {
+    player.msRequestFullscreen();
   }
-}
+};
 
+// ভিডিও এলিমেন্টের নিজস্ব error ইভেন্ট - "ভিডিও খুলছে না" এর আসল কারণ এখানেই ধরা পড়ে
+player.addEventListener("error", () => {
+  statusEl.textContent = "❌ এই ভিডিওর লিংক থেকে প্লে করা যাচ্ছে না।";
+  errorBox.style.display = "block";
+});
+
+// ---------- বোনাস অ্যাড: সম্পূর্ণ ঐচ্ছিক, চ্যানেলকে সাপোর্ট করার জন্য — মূল ভিডিওর সাথে সম্পর্কহীন ----------
 bonusBtn.onclick = async () => {
   if (!AdController) {
     await callApi(`/api/bonus-ad/${VIDEO_ID}`);
@@ -208,33 +196,28 @@ bonusBtn.onclick = async () => {
 
 async function init() {
   let videoInfo = await fetchVideoInfo();
-  
-  if (videoInfo) {
-    currentVideoUrl = videoInfo.video_url;
-  } else {
+
+  if (!videoInfo) {
     videoInfo = {
       id: "demo",
       title: "Sample Video Player",
       thumbnail_url: "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800&q=80",
-      wait_seconds: 15,
-      video_url: "https://vjs.zencdn.net/v/oceans.mp4"
+      video_url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
     };
-    currentVideoUrl = videoInfo.video_url;
   }
 
+  currentVideoUrl = videoInfo.video_url;
   document.title = videoInfo.title;
   titleEl.textContent = videoInfo.title;
-  thumbEl.src = videoInfo.thumbnail_url;
-  thumbEl.style.display = "inline-block";
-  WAIT_SECONDS = videoInfo.wait_seconds || 15;
-  secondsLeft = WAIT_SECONDS;
 
-  const progress = await fetchProgress();
-  if (progress && progress.unlocked) {
-    renderUnlocked(progress.video_url || currentVideoUrl);
-  } else {
-    renderWaitUI();
+  if (videoInfo.thumbnail_url) {
+    thumbEl.src = videoInfo.thumbnail_url;
+    thumbEl.onload = () => { thumbEl.style.display = "inline-block"; };
+    thumbEl.onerror = () => { thumbEl.style.display = "none"; };
   }
+
+  // ভিডিও সরাসরি ও তাৎক্ষণিকভাবে চালু হবে — কোনো wait বা বাধ্যতামূলক অ্যাড নেই
+  renderVideo(currentVideoUrl);
 }
 
 init();
