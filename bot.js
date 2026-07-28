@@ -1,16 +1,27 @@
 // bot.js - অ্যাডমিন প্রাইভেটে /addvideo দিলে ধাপে ধাপে
-// টাইটেল/থাম্বনেইল/ভিডিও URL নিয়ে ডাটাবেজে সেভ করে এবং চ্যানেলে অটো-পোস্ট করে
+// টাইটেল/থাম্বনেইল/ভিডিও URL নিয়ে ডাটাবেজে সেভ করে, ভিডিওর প্রথম কয়েক
+// সেকেন্ডের একটা প্রিভিউ ক্লিপ কেটে সেটা চ্যানেলে অটো-পোস্ট করে
 
 require("dotenv").config();
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+const { randomUUID } = require("crypto");
 const TelegramBotModule = require("node-telegram-bot-api");
 // CJS/ESM কম্প্যাটিবিলিটি ফিক্স (Render Node v24 environment এর জন্য)
 const TelegramBot = TelegramBotModule.default || TelegramBotModule;
+
+const ffmpegPath = require("ffmpeg-static");
+const ffmpeg = require("fluent-ffmpeg");
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 const { addVideo, getVideo } = require("./db");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const WEBAPP_BASE_URL = process.env.WEBAPP_BASE_URL;
+const PREMIUM_CONTACT = process.env.PREMIUM_CONTACT || "@SecretVault_BD";
+const PREVIEW_SECONDS = Number(process.env.PREVIEW_SECONDS || 3); // ২-৪ সেকেন্ডের মধ্যে যেকোনো একটা মান দিতে পারেন
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
   .split(",")
   .map((x) => Number(x.trim()))
@@ -30,8 +41,6 @@ function isAdmin(userId) {
 
 bot.onText(/\/addvideo/, (msg) => {
   const userId = msg.from.id;
-  // console.log("তোমার Telegram ID:", userId);
-  // console.log("ADMIN_IDS এ যা আছে:", ADMIN_IDS);
   if (!isAdmin(userId)) {
     bot.sendMessage(msg.chat.id, "❌ তুমি এই কমান্ড ব্যবহার করার অনুমতিপ্রাপ্ত না।");
     return;
@@ -63,6 +72,11 @@ bot.on("message", async (msg) => {
   if (state.step === "video") {
     state.videoUrl = msg.text.trim();
 
+    const processingMsg = await bot.sendMessage(
+      msg.chat.id,
+      "⏳ ভিডিও সেভ হচ্ছে এবং প্রিভিউ ক্লিপ তৈরি হচ্ছে, একটু অপেক্ষা করো..."
+    );
+
     try {
       // PostgreSQL Async Support
       const videoId = await addVideo({
@@ -75,17 +89,48 @@ bot.on("message", async (msg) => {
 
       bot.sendMessage(
         msg.chat.id,
-        `✅ ভিডিও যোগ হয়েছে এবং চ্যানেলে পোস্ট হয়ে গেছে!\nVideo ID: \`${videoId}\``,
+        `✅ ভিডিও যোগ হয়েছে এবং প্রিভিউসহ চ্যানেলে পোস্ট হয়ে গেছে!\nVideo ID: \`${videoId}\``,
         { parse_mode: "Markdown" }
       );
     } catch (error) {
       console.error("Error adding video:", error);
-      bot.sendMessage(msg.chat.id, "❌ ভিডিও সেভ করতে সমস্যা হয়েছে।");
+      bot.sendMessage(
+        msg.chat.id,
+        "❌ ভিডিও সেভ বা প্রিভিউ তৈরি করতে সমস্যা হয়েছে। কনসোল লগ চেক করো।"
+      );
+    } finally {
+      bot.deleteMessage(msg.chat.id, processingMsg.message_id).catch(() => {});
     }
 
     delete userState[userId];
   }
 });
+
+// ---------- আসল ভিডিও URL থেকে প্রথম কয়েক সেকেন্ডের ছোট প্রিভিউ ক্লিপ বানানো ----------
+function createPreviewClip(videoUrl, videoId) {
+  return new Promise((resolve, reject) => {
+    const outputPath = path.join(
+      os.tmpdir(),
+      `preview_${videoId}_${randomUUID()}.mp4`
+    );
+
+    ffmpeg(videoUrl)
+      .setStartTime(0)
+      .duration(PREVIEW_SECONDS)
+      .outputOptions([
+        "-c:v libx264",
+        "-c:a aac",
+        "-preset veryfast",
+        "-movflags +faststart",
+      ])
+      .on("error", (err) => {
+        console.error("ffmpeg preview error:", err.message);
+        reject(err);
+      })
+      .on("end", () => resolve(outputPath))
+      .save(outputPath);
+  });
+}
 
 async function postToChannel(videoId) {
   const video = await getVideo(videoId);
@@ -96,27 +141,52 @@ async function postToChannel(videoId) {
 
   const directWebAppUrl = `https://t.me/norrcartonbot/noor?startapp=${videoId}`;
 
-  const messageText =
+  const caption =
     `🎬 *${video.title}*\n\n` +
-    `🔥 ফ্রি ফুল ভিডিও দেখতে নিচের বাটনে চাপো\n` +
-    `👇 অ্যাড দেখলে সাথে সাথে খুলে যাবে`;
+    `━━━━━━━━━━━━━━━\n` +
+    `▶️  উপরে প্রিভিউ দেখুন\n` +
+    `🎁  সম্পূর্ণ ভিডিও ১০০% ফ্রি\n` +
+    `━━━━━━━━━━━━━━━\n\n` +
+    `💎 Premium কনটেন্টের জন্য\n` +
+    `👉 ${PREMIUM_CONTACT}`;
 
+  const replyMarkup = {
+    inline_keyboard: [
+      [
+        {
+          text: "▶️ Watch Full Video",
+          url: directWebAppUrl,
+        },
+      ],
+    ],
+  };
+
+  let previewPath = null;
   try {
-    await bot.sendMessage(CHANNEL_ID, messageText, {
+    previewPath = await createPreviewClip(video.videoUrl, videoId);
+
+    await bot.sendVideo(CHANNEL_ID, previewPath, {
+      caption,
       parse_mode: "Markdown",
-      reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: "🎬 Watch Video",
-              url: directWebAppUrl,
-            },
-          ],
-        ],
-      },
+      reply_markup: replyMarkup,
+      supports_streaming: true,
     });
   } catch (e) {
-    console.error("Error posting to channel:", e.message);
+    console.error("প্রিভিউ ক্লিপ পাঠাতে সমস্যা হয়েছে, শুধু টেক্সট মেসেজ পাঠানো হচ্ছে:", e.message);
+    // ফলব্যাক: প্রিভিউ ক্লিপ বানানো/পাঠানো সম্ভব না হলে অন্তত টেক্সট মেসেজ যাবে,
+    // যাতে ভিডিওটা চ্যানেলে অনুপস্থিত না থাকে
+    try {
+      await bot.sendMessage(CHANNEL_ID, caption, {
+        parse_mode: "Markdown",
+        reply_markup: replyMarkup,
+      });
+    } catch (err2) {
+      console.error("Error posting fallback text message:", err2.message);
+    }
+  } finally {
+    if (previewPath) {
+      fs.unlink(previewPath, () => {}); // টেম্প ফাইল পরিষ্কার করা
+    }
   }
 }
 
