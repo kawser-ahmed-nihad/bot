@@ -128,36 +128,58 @@ bot.on("message", async (msg) => {
 });
 
 // ---------- আসল ভিডিও URL থেকে প্রথম কয়েক সেকেন্ডের ছোট প্রিভিউ ক্লিপ বানানো ----------
-function createPreviewClip(videoUrl, videoId) {
+// আগে "stream copy" (-c copy) দিয়ে ট্রাই করা হয় — এটা ডিকোড/এনকোড ছাড়াই শুধু কেটে
+// কপি করে, তাই RAM/CPU খুবই কম লাগে (Render Free tier এর ৫১২MB এর জন্য উপযুক্ত)।
+// এটা fail করলে, অনেক হালকা সেটিংসে (ছোট resolution, single thread) রি-এনকোড ট্রাই করা হয়।
+function runFfmpeg(videoUrl, outputPath, outputOptions) {
   return new Promise((resolve, reject) => {
-    const outputPath = path.join(
-      os.tmpdir(),
-      `preview_${videoId}_${randomUUID()}.mp4`
-    );
-
-    console.log(`[preview] শুরু হচ্ছে -> videoId=${videoId}, source=${videoUrl}`);
-
     ffmpeg(videoUrl)
       .setStartTime(0)
       .duration(PREVIEW_SECONDS)
-      .outputOptions([
-        "-c:v libx264",
-        "-c:a aac",
-        "-preset veryfast",
-        "-movflags +faststart",
-      ])
+      .outputOptions(outputOptions)
       .on("start", (cmd) => console.log("[preview] ffmpeg command:", cmd))
       .on("stderr", (line) => console.log("[preview][ffmpeg stderr]", line))
-      .on("error", (err) => {
-        console.error(`[preview] ffmpeg ব্যর্থ হয়েছে -> videoId=${videoId}:`, err.message);
-        reject(err);
-      })
-      .on("end", () => {
-        console.log(`[preview] সফলভাবে তৈরি হয়েছে -> ${outputPath}`);
-        resolve(outputPath);
-      })
+      .on("error", (err) => reject(err))
+      .on("end", () => resolve(outputPath))
       .save(outputPath);
   });
+}
+
+async function createPreviewClip(videoUrl, videoId) {
+  const outputPath = path.join(
+    os.tmpdir(),
+    `preview_${videoId}_${randomUUID()}.mp4`
+  );
+
+  console.log(`[preview] শুরু হচ্ছে -> videoId=${videoId}, source=${videoUrl}`);
+
+  // ধাপ ১: হালকা stream-copy পদ্ধতি (কোনো ডিকোড/এনকোড লাগে না)
+  try {
+    console.log("[preview] stream-copy পদ্ধতিতে ট্রাই করা হচ্ছে...");
+    await runFfmpeg(videoUrl, outputPath, ["-c copy", "-movflags +faststart"]);
+    console.log(`[preview] ✅ stream-copy দিয়ে সফলভাবে তৈরি হয়েছে -> ${outputPath}`);
+    return outputPath;
+  } catch (err) {
+    console.error(`[preview] stream-copy ব্যর্থ হয়েছে -> videoId=${videoId}:`, err.message);
+  }
+
+  // ধাপ ২: stream-copy fail করলে, কম রিসোর্স খরচ করে ছোট resolution এ রি-এনকোড ট্রাই করা হয়
+  try {
+    console.log("[preview] হালকা রি-এনকোড পদ্ধতিতে ট্রাই করা হচ্ছে...");
+    await runFfmpeg(videoUrl, outputPath, [
+      "-c:v libx264",
+      "-c:a aac",
+      "-preset ultrafast",
+      "-threads 1",
+      "-vf scale=480:-2",
+      "-movflags +faststart",
+    ]);
+    console.log(`[preview] ✅ রি-এনকোড দিয়ে সফলভাবে তৈরি হয়েছে -> ${outputPath}`);
+    return outputPath;
+  } catch (err2) {
+    console.error(`[preview] রি-এনকোডও ব্যর্থ হয়েছে -> videoId=${videoId}:`, err2.message);
+    throw err2;
+  }
 }
 
 async function postToChannel(videoId) {
