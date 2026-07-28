@@ -6,6 +6,8 @@
 <title>Media Player</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
+<!-- Monetag SDK -->
+<script src='//libtl.com/sdk.js' data-zone='11420971' data-sdk='show_11420971'></script>
 <style>
   body { margin:0; font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif; background:#0f1115; color:#fff; text-align:center; padding:16px; }
   .thumb { width:100%; max-width:480px; height:240px; object-fit:cover; border-radius:14px; margin-top:12px; display:none; }
@@ -13,6 +15,7 @@
   .status { color:#9aa0a6; margin-bottom:16px; font-size:14px; }
   button, .direct-btn { width:100%; max-width:480px; padding:16px; font-size:16px; font-weight:bold; border:none; border-radius:12px; margin:8px 0; cursor:pointer; box-sizing:border-box; display:inline-block; text-decoration:none; }
   .bonus-btn { background:#1c1e26; color:#9aa0a6; border:1px solid #2c2f3a !important; font-size:14px !important; padding:12px !important; }
+  .watch-btn { background:linear-gradient(135deg,#6a5cff,#8b7cff); color:#fff; }
   .error-box { background:#3a1c1c; color:#ff8a8a; border-radius:10px; padding:14px; font-size:14px; margin-top:12px; display:none; }
 
   .player-box { width:100%; max-width:480px; margin:16px auto 0; position:relative; background:#000; border-radius:12px; overflow:hidden; }
@@ -24,6 +27,10 @@
 <img class="thumb" id="thumb" alt="thumbnail">
 <h2 id="titleEl">ভিডিও লোড হচ্ছে...</h2>
 <p class="status" id="status">অনুগ্রহ করে অপেক্ষা করুন...</p>
+
+<div id="watch-section">
+  <button class="watch-btn" id="watchBtn">▶️ ভিডিও দেখুন</button>
+</div>
 
 <div id="video-section" style="display:none;">
   <div class="player-box">
@@ -57,6 +64,8 @@ const userId = tg.initDataUnsafe?.user?.id || 12345678;
 const thumbEl = document.getElementById("thumb");
 const titleEl = document.getElementById("titleEl");
 const statusEl = document.getElementById("status");
+const watchSection = document.getElementById("watch-section");
+const watchBtn = document.getElementById("watchBtn");
 const videoSection = document.getElementById("video-section");
 const player = document.getElementById("player");
 const bonusBtn = document.getElementById("bonusBtn");
@@ -67,6 +76,16 @@ const ADSGRAM_BLOCK_ID = "int-39926";
 const AdController = (window.Adsgram && ADSGRAM_BLOCK_ID)
   ? window.Adsgram.init({ blockId: ADSGRAM_BLOCK_ID })
   : null;
+
+// Monetag ড্যাশবোর্ডে যে Zone ID পাবেন, সেটা এখানে বসান (উপরের <script> ট্যাগেও একই ID থাকতে হবে)
+const MONETAG_ZONE_ID = "11420971";
+function showMonetagAd() {
+  const fn = window["show_" + MONETAG_ZONE_ID];
+  if (typeof fn === "function") {
+    return fn();
+  }
+  return Promise.reject(new Error("Monetag SDK not loaded"));
+}
 
 let currentVideoUrl = "";
 
@@ -216,9 +235,24 @@ async function init() {
     thumbEl.onerror = () => { thumbEl.style.display = "none"; };
   }
 
-  // ভিডিও সরাসরি ও তাৎক্ষণিকভাবে চালু হবে — কোনো wait বা বাধ্যতামূলক অ্যাড নেই
-  renderVideo(currentVideoUrl);
+  statusEl.textContent = "ভিডিওটি দেখতে নিচের বাটনে ক্লিক করুন";
 }
+
+// ---------- ইউজার নিজে ক্লিক করে ভিডিও দেখা শুরু করে — এই ক্লিকেই অ্যাড ট্রিগার হয় ----------
+watchBtn.onclick = async () => {
+  watchBtn.disabled = true;
+  watchBtn.textContent = "লোড হচ্ছে...";
+
+  try {
+    await showMonetagAd();
+  } catch (e) {
+    // অ্যাড লোড না হলে বা কোনো কারণে fail করলেও ভিডিও আটকে রাখা হবে না
+    console.log("Ad skipped/failed:", e);
+  }
+
+  watchSection.style.display = "none";
+  renderVideo(currentVideoUrl);
+};
 
 init();
 </script>
