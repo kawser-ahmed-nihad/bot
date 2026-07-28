@@ -8,9 +8,16 @@ const {
 } = require("./db");
 
 const app = express();
-require("./bot"); // 👈 এই লাইনটি যোগ করুন
+const { bot, WEBHOOK_PATH } = require("./bot"); // 👈 webhook mode
 app.use(cors());
 app.use(express.json());
+
+// Telegram এই রুটে POST করে আপডেট পাঠাবে (polling এর বদলে)
+app.post(WEBHOOK_PATH, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
+
 app.use(express.static(path.join(__dirname, "public")));
 
 // ফলব্যাক ডেমো ডাটা (যখন DB তে ভিডিও পাওয়া যাবে না)
