@@ -85,13 +85,21 @@ bot.on("message", async (msg) => {
         videoUrl: state.videoUrl,
       });
 
-      await postToChannel(videoId);
+      const posted = await postToChannel(videoId);
 
-      bot.sendMessage(
-        msg.chat.id,
-        `✅ ভিডিও যোগ হয়েছে এবং প্রিভিউসহ চ্যানেলে পোস্ট হয়ে গেছে!\nVideo ID: \`${videoId}\``,
-        { parse_mode: "Markdown" }
-      );
+      if (posted) {
+        bot.sendMessage(
+          msg.chat.id,
+          `✅ ভিডিও যোগ হয়েছে এবং প্রিভিউসহ চ্যানেলে পোস্ট হয়ে গেছে!\nVideo ID: \`${videoId}\``,
+          { parse_mode: "Markdown" }
+        );
+      } else {
+        bot.sendMessage(
+          msg.chat.id,
+          `⚠️ ভিডিও ডাটাবেজে সেভ হয়েছে (Video ID: \`${videoId}\`), কিন্তু চ্যানেলে পোস্ট করতে ব্যর্থ হয়েছে। Render Logs চেক করো।`,
+          { parse_mode: "Markdown" }
+        );
+      }
     } catch (error) {
       console.error("Error adding video:", error);
       bot.sendMessage(
@@ -114,6 +122,8 @@ function createPreviewClip(videoUrl, videoId) {
       `preview_${videoId}_${randomUUID()}.mp4`
     );
 
+    console.log(`[preview] শুরু হচ্ছে -> videoId=${videoId}, source=${videoUrl}`);
+
     ffmpeg(videoUrl)
       .setStartTime(0)
       .duration(PREVIEW_SECONDS)
@@ -123,19 +133,31 @@ function createPreviewClip(videoUrl, videoId) {
         "-preset veryfast",
         "-movflags +faststart",
       ])
+      .on("start", (cmd) => console.log("[preview] ffmpeg command:", cmd))
+      .on("stderr", (line) => console.log("[preview][ffmpeg stderr]", line))
       .on("error", (err) => {
-        console.error("ffmpeg preview error:", err.message);
+        console.error(`[preview] ffmpeg ব্যর্থ হয়েছে -> videoId=${videoId}:`, err.message);
         reject(err);
       })
-      .on("end", () => resolve(outputPath))
+      .on("end", () => {
+        console.log(`[preview] সফলভাবে তৈরি হয়েছে -> ${outputPath}`);
+        resolve(outputPath);
+      })
       .save(outputPath);
   });
 }
 
 async function postToChannel(videoId) {
+  console.log(`[postToChannel] শুরু -> videoId=${videoId}, CHANNEL_ID=${CHANNEL_ID}`);
+
   const video = await getVideo(videoId);
   if (!video) {
-    console.error("Video not found for ID:", videoId);
+    console.error("[postToChannel] Video not found for ID:", videoId);
+    return;
+  }
+
+  if (!CHANNEL_ID) {
+    console.error("[postToChannel] ❌ CHANNEL_ID .env এ সেট করা নেই! পোস্ট করা সম্ভব না।");
     return;
   }
 
@@ -162,32 +184,44 @@ async function postToChannel(videoId) {
   };
 
   let previewPath = null;
+  let posted = false;
   try {
     previewPath = await createPreviewClip(video.videoUrl, videoId);
 
+    console.log("[postToChannel] sendVideo কল করা হচ্ছে...");
     await bot.sendVideo(CHANNEL_ID, previewPath, {
       caption,
       parse_mode: "Markdown",
       reply_markup: replyMarkup,
       supports_streaming: true,
     });
+    console.log("[postToChannel] ✅ sendVideo সফল হয়েছে।");
+    posted = true;
   } catch (e) {
-    console.error("প্রিভিউ ক্লিপ পাঠাতে সমস্যা হয়েছে, শুধু টেক্সট মেসেজ পাঠানো হচ্ছে:", e.message);
+    console.error(
+      "[postToChannel] প্রিভিউ ক্লিপ পাঠাতে সমস্যা হয়েছে, ফলব্যাক টেক্সট পাঠানো হচ্ছে। কারণ:",
+      e.message
+    );
     // ফলব্যাক: প্রিভিউ ক্লিপ বানানো/পাঠানো সম্ভব না হলে অন্তত টেক্সট মেসেজ যাবে,
     // যাতে ভিডিওটা চ্যানেলে অনুপস্থিত না থাকে
     try {
+      console.log("[postToChannel] fallback sendMessage কল করা হচ্ছে...");
       await bot.sendMessage(CHANNEL_ID, caption, {
         parse_mode: "Markdown",
         reply_markup: replyMarkup,
       });
+      console.log("[postToChannel] ✅ fallback sendMessage সফল হয়েছে।");
+      posted = true;
     } catch (err2) {
-      console.error("Error posting fallback text message:", err2.message);
+      console.error("[postToChannel] ❌ fallback sendMessage ও ব্যর্থ হয়েছে:", err2.message);
     }
   } finally {
     if (previewPath) {
       fs.unlink(previewPath, () => {}); // টেম্প ফাইল পরিষ্কার করা
     }
   }
+
+  return posted;
 }
 
 console.log("🤖 Admin bot running...");
