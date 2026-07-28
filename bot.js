@@ -169,6 +169,18 @@ async function postToChannel(videoId) {
     return;
   }
 
+  // db.js থেকে PostgreSQL snake_case (video_url) অথবা camelCase (videoUrl) —
+  // যেকোনো ফরম্যাটে আসতে পারে, তাই দুটোই চেক করা হচ্ছে
+  const videoUrl = video.videoUrl || video.video_url;
+  const title = video.title;
+
+  console.log(`[postToChannel] video অবজেক্ট:`, JSON.stringify(video));
+
+  if (!videoUrl) {
+    console.error("[postToChannel] ❌ videoUrl খালি! DB থেকে সঠিক ফিল্ড আসছে না।");
+    return;
+  }
+
   if (!CHANNEL_ID) {
     console.error("[postToChannel] ❌ CHANNEL_ID .env এ সেট করা নেই! পোস্ট করা সম্ভব না।");
     return;
@@ -176,14 +188,24 @@ async function postToChannel(videoId) {
 
   const directWebAppUrl = `https://t.me/norrcartonbot/noor?startapp=${videoId}`;
 
+  // HTML parse mode ব্যবহার করা হচ্ছে Markdown এর বদলে — কারণ Markdown এ '_' '*' '['
+  // এই চিহ্নগুলো থাকলে (যেমন @SecretVault_BD এর আন্ডারস্কোর) পার্সিং এরর হয়।
+  // HTML মোডে শুধু <, >, & escape করলেই যথেষ্ট, তাই এটা অনেক বেশি নিরাপদ।
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
   const caption =
-    `🎬 *${video.title}*\n\n` +
+    `🎬 <b>${escapeHtml(title)}</b>\n\n` +
     `━━━━━━━━━━━━━━━\n` +
     `▶️  উপরে প্রিভিউ দেখুন\n` +
     `🎁  সম্পূর্ণ ভিডিও ১০০% ফ্রি\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💎 Premium কনটেন্টের জন্য\n` +
-    `👉 ${PREMIUM_CONTACT}`;
+    `👉 ${escapeHtml(PREMIUM_CONTACT)}`;
 
   const replyMarkup = {
     inline_keyboard: [
@@ -199,12 +221,12 @@ async function postToChannel(videoId) {
   let previewPath = null;
   let posted = false;
   try {
-    previewPath = await createPreviewClip(video.videoUrl, videoId);
+    previewPath = await createPreviewClip(videoUrl, videoId);
 
     console.log("[postToChannel] sendVideo কল করা হচ্ছে...");
     await bot.sendVideo(CHANNEL_ID, previewPath, {
       caption,
-      parse_mode: "Markdown",
+      parse_mode: "HTML",
       reply_markup: replyMarkup,
       supports_streaming: true,
     });
@@ -220,7 +242,7 @@ async function postToChannel(videoId) {
     try {
       console.log("[postToChannel] fallback sendMessage কল করা হচ্ছে...");
       await bot.sendMessage(CHANNEL_ID, caption, {
-        parse_mode: "Markdown",
+        parse_mode: "HTML",
         reply_markup: replyMarkup,
       });
       console.log("[postToChannel] ✅ fallback sendMessage সফল হয়েছে।");
@@ -239,4 +261,4 @@ async function postToChannel(videoId) {
 
 console.log("🤖 Admin bot running (webhook mode)...");
 
-module.exports = { bot, WEBHOOK_PATH };
+module.exports = { bot, WEBHOOK_PATH };git add .ADMIN_IDS
