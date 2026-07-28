@@ -261,4 +261,4 @@ async function postToChannel(videoId) {
 
 console.log("🤖 Admin bot running (webhook mode)...");
 
-module.exports = { bot, WEBHOOK_PATH };git add .ADMIN_IDS
+module.exports = { bot, WEBHOOK_PATH };
