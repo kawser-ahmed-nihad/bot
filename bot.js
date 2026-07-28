@@ -137,7 +137,13 @@ async function downloadToTemp(videoUrl, videoId) {
   const srcPath = path.join(os.tmpdir(), `src_${videoId}_${randomUUID()}.mp4`);
   console.log(`[preview] ভিডিও ডাউনলোড করা হচ্ছে -> ${videoUrl}`);
 
-  const res = await fetch(videoUrl);
+  const res = await fetch(videoUrl, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      Accept: "*/*",
+    },
+  });
   if (!res.ok || !res.body) {
     throw new Error(`ভিডিও ডাউনলোড ব্যর্থ, HTTP status: ${res.status}`);
   }
