@@ -7,6 +7,8 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { randomUUID } = require("crypto");
+const { Readable } = require("stream");
+const { pipeline } = require("stream/promises");
 const TelegramBotModule = require("node-telegram-bot-api");
 // CJS/ESM কম্প্যাটিবিলিটি ফিক্স (Render Node v24 environment এর জন্য)
 const TelegramBot = TelegramBotModule.default || TelegramBotModule;
@@ -127,13 +129,33 @@ bot.on("message", async (msg) => {
   }
 });
 
+// ---------- ভিডিও URL থেকে আগে লোকাল টেম্প ফাইলে ডাউনলোড করা ----------
+// ffmpeg-static বাইনারি সরাসরি HTTPS URL থেকে পড়তে গেলে Render এর কন্টেইনারে
+// SIGSEGV দিয়ে ক্র্যাশ করছিল। তাই Node দিয়ে আগে ডাউনলোড করে, ffmpeg কে শুধু
+// লোকাল ফাইল দেওয়া হচ্ছে — এতে ffmpeg এর নিজের HTTPS হ্যান্ডলিং এড়ানো যায়।
+async function downloadToTemp(videoUrl, videoId) {
+  const srcPath = path.join(os.tmpdir(), `src_${videoId}_${randomUUID()}.mp4`);
+  console.log(`[preview] ভিডিও ডাউনলোড করা হচ্ছে -> ${videoUrl}`);
+
+  const res = await fetch(videoUrl);
+  if (!res.ok || !res.body) {
+    throw new Error(`ভিডিও ডাউনলোড ব্যর্থ, HTTP status: ${res.status}`);
+  }
+
+  await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(srcPath));
+
+  const stats = fs.statSync(srcPath);
+  console.log(`[preview] ✅ ডাউনলোড শেষ -> ${srcPath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+  return srcPath;
+}
+
 // ---------- আসল ভিডিও URL থেকে প্রথম কয়েক সেকেন্ডের ছোট প্রিভিউ ক্লিপ বানানো ----------
 // আগে "stream copy" (-c copy) দিয়ে ট্রাই করা হয় — এটা ডিকোড/এনকোড ছাড়াই শুধু কেটে
 // কপি করে, তাই RAM/CPU খুবই কম লাগে (Render Free tier এর ৫১২MB এর জন্য উপযুক্ত)।
 // এটা fail করলে, অনেক হালকা সেটিংসে (ছোট resolution, single thread) রি-এনকোড ট্রাই করা হয়।
-function runFfmpeg(videoUrl, outputPath, outputOptions) {
+function runFfmpeg(inputPath, outputPath, outputOptions) {
   return new Promise((resolve, reject) => {
-    ffmpeg(videoUrl)
+    ffmpeg(inputPath)
       .setStartTime(0)
       .duration(PREVIEW_SECONDS)
       .outputOptions(outputOptions)
@@ -153,32 +175,44 @@ async function createPreviewClip(videoUrl, videoId) {
 
   console.log(`[preview] শুরু হচ্ছে -> videoId=${videoId}, source=${videoUrl}`);
 
-  // ধাপ ১: হালকা stream-copy পদ্ধতি (কোনো ডিকোড/এনকোড লাগে না)
+  let srcPath = null;
   try {
-    console.log("[preview] stream-copy পদ্ধতিতে ট্রাই করা হচ্ছে...");
-    await runFfmpeg(videoUrl, outputPath, ["-c copy", "-movflags +faststart"]);
-    console.log(`[preview] ✅ stream-copy দিয়ে সফলভাবে তৈরি হয়েছে -> ${outputPath}`);
-    return outputPath;
-  } catch (err) {
-    console.error(`[preview] stream-copy ব্যর্থ হয়েছে -> videoId=${videoId}:`, err.message);
+    srcPath = await downloadToTemp(videoUrl, videoId);
+  } catch (dlErr) {
+    console.error(`[preview] ডাউনলোড ব্যর্থ -> videoId=${videoId}:`, dlErr.message);
+    throw dlErr;
   }
 
-  // ধাপ ২: stream-copy fail করলে, কম রিসোর্স খরচ করে ছোট resolution এ রি-এনকোড ট্রাই করা হয়
   try {
-    console.log("[preview] হালকা রি-এনকোড পদ্ধতিতে ট্রাই করা হচ্ছে...");
-    await runFfmpeg(videoUrl, outputPath, [
-      "-c:v libx264",
-      "-c:a aac",
-      "-preset ultrafast",
-      "-threads 1",
-      "-vf scale=480:-2",
-      "-movflags +faststart",
-    ]);
-    console.log(`[preview] ✅ রি-এনকোড দিয়ে সফলভাবে তৈরি হয়েছে -> ${outputPath}`);
-    return outputPath;
-  } catch (err2) {
-    console.error(`[preview] রি-এনকোডও ব্যর্থ হয়েছে -> videoId=${videoId}:`, err2.message);
-    throw err2;
+    // ধাপ ১: হালকা stream-copy পদ্ধতি (কোনো ডিকোড/এনকোড লাগে না)
+    try {
+      console.log("[preview] stream-copy পদ্ধতিতে ট্রাই করা হচ্ছে...");
+      await runFfmpeg(srcPath, outputPath, ["-c copy", "-movflags +faststart"]);
+      console.log(`[preview] ✅ stream-copy দিয়ে সফলভাবে তৈরি হয়েছে -> ${outputPath}`);
+      return outputPath;
+    } catch (err) {
+      console.error(`[preview] stream-copy ব্যর্থ হয়েছে -> videoId=${videoId}:`, err.message);
+    }
+
+    // ধাপ ২: stream-copy fail করলে, কম রিসোর্স খরচ করে ছোট resolution এ রি-এনকোড ট্রাই করা হয়
+    try {
+      console.log("[preview] হালকা রি-এনকোড পদ্ধতিতে ট্রাই করা হচ্ছে...");
+      await runFfmpeg(srcPath, outputPath, [
+        "-c:v libx264",
+        "-c:a aac",
+        "-preset ultrafast",
+        "-threads 1",
+        "-vf scale=480:-2",
+        "-movflags +faststart",
+      ]);
+      console.log(`[preview] ✅ রি-এনকোড দিয়ে সফলভাবে তৈরি হয়েছে -> ${outputPath}`);
+      return outputPath;
+    } catch (err2) {
+      console.error(`[preview] রি-এনকোডও ব্যর্থ হয়েছে -> videoId=${videoId}:`, err2.message);
+      throw err2;
+    }
+  } finally {
+    if (srcPath) fs.unlink(srcPath, () => {}); // ডাউনলোড করা মূল ফাইল পরিষ্কার করা
   }
 }
 
