@@ -3,50 +3,33 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Media Player</title>
+<title>Get Video</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="https://sad.adsgram.ai/js/sad.min.js"></script>
+
 <!-- Monetag SDK -->
 <script src='//libtl.com/sdk.js' data-zone='11420971' data-sdk='show_11420971'></script>
+
 <style>
   body { margin:0; font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif; background:#0f1115; color:#fff; text-align:center; padding:16px; }
   .thumb { width:100%; max-width:480px; height:240px; object-fit:cover; border-radius:14px; margin-top:12px; display:none; }
   h2 { margin:16px 0 6px; font-size:20px; }
   .status { color:#9aa0a6; margin-bottom:16px; font-size:14px; }
-  button, .direct-btn { width:100%; max-width:480px; padding:16px; font-size:16px; font-weight:bold; border:none; border-radius:12px; margin:8px 0; cursor:pointer; box-sizing:border-box; display:inline-block; text-decoration:none; }
-  .bonus-btn { background:#1c1e26; color:#9aa0a6; border:1px solid #2c2f3a !important; font-size:14px !important; padding:12px !important; }
+  button { width:100%; max-width:480px; padding:16px; font-size:16px; font-weight:bold; border:none; border-radius:12px; margin:8px 0; cursor:pointer; box-sizing:border-box; }
   .watch-btn { background:linear-gradient(135deg,#6a5cff,#8b7cff); color:#fff; }
-  .error-box { background:#3a1c1c; color:#ff8a8a; border-radius:10px; padding:14px; font-size:14px; margin-top:12px; display:none; }
-
-  .player-box { width:100%; max-width:480px; margin:16px auto 0; position:relative; background:#000; border-radius:12px; overflow:hidden; }
-  video { width:100%; height:auto; display:block; }
+  .progress-box { background:#1c1e26; border:1px solid #2c2f3a; border-radius:10px; padding:12px; margin-top:10px; max-width:480px; margin-left:auto; margin-right:auto; }
 </style>
 </head>
 <body>
 
 <img class="thumb" id="thumb" alt="thumbnail">
 <h2 id="titleEl">ভিডিও লোড হচ্ছে...</h2>
-<p class="status" id="status">অনুগ্রহ করে অপেক্ষা করুন...</p>
+<p class="status" id="status">ইনবক্সে ভিডিও পেতে নিচের ধাপগুলো পূরণ করুন</p>
 
-<div id="watch-section">
-  <button class="watch-btn" id="watchBtn">▶️ ভিডিও দেখুন</button>
+<div class="progress-box">
+  <p id="adProgress">অ্যাড দেখা হয়েছে: <b>0 / 2</b></p>
 </div>
 
-<div id="video-section" style="display:none;">
-  <div class="player-box">
-    <video id="player" controls playsinline preload="auto" autoplay></video>
-  </div>
-
-  <button class="direct-btn" id="fullscreenBtn" style="background:#3a3f4b;">⛶ ফুল স্ক্রিনে দেখুন</button>
-
-  <div class="error-box" id="errorBox">
-    ⚠️ এই ভিডিওটি এই লিংক থেকে সরাসরি চালানো সম্ভব হচ্ছে না।
-    <br>এই হোস্টিং সার্ভিস সরাসরি প্লে-ব্যাক সাপোর্ট করে না (যেমন Terabox)।
-    <br>ভিডিওটি Cloudflare R2 বা Backblaze B2 তে আপলোড করে লিংক বদলে দিন।
-  </div>
-
-  <button class="bonus-btn" id="bonusBtn">🎁 চ্যানেলকে সাপোর্ট করতে একটি অ্যাড দেখুন (ঐচ্ছিক)</button>
-</div>
+<button class="watch-btn" id="watchBtn">▶️ ২টি অ্যাড দেখুন ও ইনবক্সে ভিডিও নিন</button>
 
 <script>
 const API_BASE_URL = "https://bot-jibt.onrender.com";
@@ -57,27 +40,17 @@ tg.expand();
 
 const urlParams = new URLSearchParams(window.location.search);
 const tgStartParam = tg.initDataUnsafe?.start_param;
-const VIDEO_ID = tgStartParam || urlParams.get('startapp') || urlParams.get('id') || window.location.pathname.split("/").filter(Boolean).pop() || "demo";
+const VIDEO_ID = tgStartParam || urlParams.get('startapp') || urlParams.get('id') || window.location.pathname.split("/").filter(Boolean).pop();
 
-const userId = tg.initDataUnsafe?.user?.id || 12345678;
+const userId = tg.initDataUnsafe?.user?.id;
 
 const thumbEl = document.getElementById("thumb");
 const titleEl = document.getElementById("titleEl");
 const statusEl = document.getElementById("status");
-const watchSection = document.getElementById("watch-section");
 const watchBtn = document.getElementById("watchBtn");
-const videoSection = document.getElementById("video-section");
-const player = document.getElementById("player");
-const bonusBtn = document.getElementById("bonusBtn");
-const fullscreenBtn = document.getElementById("fullscreenBtn");
-const errorBox = document.getElementById("errorBox");
+const adProgress = document.getElementById("adProgress");
 
-const ADSGRAM_BLOCK_ID = "int-39926";
-const AdController = (window.Adsgram && ADSGRAM_BLOCK_ID)
-  ? window.Adsgram.init({ blockId: ADSGRAM_BLOCK_ID })
-  : null;
-
-// Monetag ড্যাশবোর্ডে যে Zone ID পাবেন, সেটা এখানে বসান (উপরের <script> ট্যাগেও একই ID থাকতে হবে)
+// Monetag SDK Trigger Function
 const MONETAG_ZONE_ID = "11420971";
 function showMonetagAd() {
   const fn = window["show_" + MONETAG_ZONE_ID];
@@ -87,171 +60,89 @@ function showMonetagAd() {
   return Promise.reject(new Error("Monetag SDK not loaded"));
 }
 
-let currentVideoUrl = "";
-
-// ---------- ভিডিও URL normalize করা (Dropbox/Drive শেয়ার লিংককে direct লিংকে বদলানো) ----------
-function normalizeVideoUrl(url) {
-  if (!url) return url;
-
-  try {
-    const u = new URL(url);
-
-    // Dropbox শেয়ার লিংক -> সরাসরি ফাইল লিংক
-    if (u.hostname.includes("dropbox.com")) {
-      u.hostname = "dl.dropboxusercontent.com";
-      u.searchParams.delete("dl");
-      u.searchParams.set("raw", "1");
-      return u.toString();
-    }
-
-    // Google Drive শেয়ার লিংক -> সরাসরি ডাউনলোড লিংক
-    const gdriveMatch = url.match(/drive\.google\.com\/file\/d\/([^/]+)/);
-    if (gdriveMatch) {
-      return `https://drive.google.com/uc?export=download&id=${gdriveMatch[1]}`;
-    }
-
-    // Terabox - সরাসরি এমবেড সাপোর্ট করে না (auth token/referrer-lock থাকে)
-    // এটা URL রিরাইট দিয়ে ঠিক করা সম্ভব না
-    if (u.hostname.includes("terabox") || u.hostname.includes("1024terabox")) {
-      return null;
-    }
-
-    return url;
-  } catch (e) {
-    return url;
-  }
-}
-
-async function fetchVideoInfo() {
+async function init() {
   try {
     const res = await fetch(`${API_BASE_URL}/api/video/${VIDEO_ID}`);
-    if (!res.ok) return null;
-    return await res.json();
+    if (res.ok) {
+      const data = await res.json();
+      titleEl.textContent = data.title;
+      if (data.thumbnail_url) {
+        thumbEl.src = data.thumbnail_url;
+        thumbEl.style.display = "inline-block";
+      }
+    }
   } catch (e) {
-    return null;
+    titleEl.textContent = "ভিডিও লোড করা যাচ্ছে না";
   }
 }
 
-async function callApi(path) {
+// ---------- শুধু Monetag দিয়ে ২টি অ্যাড দেখানোর লজিক ----------
+watchBtn.onclick = async () => {
+  if (!userId) {
+    alert("ইউজার আইডি পাওয়া যায়নি! টেলিগ্রাম থেকে মিনি অ্যাপটি ওপেন করুন।");
+    return;
+  }
+
+  watchBtn.disabled = true;
+  let adsWatchedCount = 0;
+
+  // ---------------- ১ নম্বর অ্যাড (Monetag 1st Attempt) ----------------
   try {
-    const res = await fetch(`${API_BASE_URL}${path}`, {
+    statusEl.textContent = "⏳ ১ম অ্যাড চালু হচ্ছে...";
+    await showMonetagAd();
+    adsWatchedCount++;
+    adProgress.innerHTML = "অ্যাড দেখা হয়েছে: <b>1 / 2</b> ✅";
+  } catch (e) {
+    console.log("1st Monetag Ad skipped/blocked:", e);
+    // অ্যাড স্কিপ/ফেল করলেও প্রগ্রেস ১ বাড়িয়ে দেওয়া হচ্ছে যেন ফ্লো আটকে না থাকে
+    adsWatchedCount++;
+    adProgress.innerHTML = "অ্যাড দেখা হয়েছে: <b>1 / 2</b> ✅";
+  }
+
+  // ১ম ও ২য় অ্যাডের মাঝে ১ সেকেন্ডের ছোট একটা পজ
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  // ---------------- ২ নম্বর অ্যাড (Monetag 2nd Attempt) ----------------
+  try {
+    statusEl.textContent = "⏳ ২য় অ্যাড চালু হচ্ছে...";
+    await showMonetagAd();
+    adsWatchedCount++;
+    adProgress.innerHTML = "অ্যাড দেখা হয়েছে: <b>2 / 2</b> ✅";
+  } catch (e) {
+    console.log("2nd Monetag Ad skipped/blocked:", e);
+    adsWatchedCount = 2;
+    adProgress.innerHTML = "অ্যাড দেখা হয়েছে: <b>2 / 2</b> ✅";
+  }
+
+  // ব্যাকএন্ডে রিকোয়েস্ট পাঠানো
+  statusEl.textContent = "⏳ ইনবক্সে ভিডিও পাঠানো হচ্ছে...";
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/send-video`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId }),
+      body: JSON.stringify({
+        user_id: userId,
+        video_id: VIDEO_ID,
+        ads_completed: adsWatchedCount
+      })
     });
-    return await res.json();
-  } catch (e) {
-    return {};
+
+    const resData = await response.json();
+
+    if (resData.success) {
+      tg.showAlert("✅ " + resData.message + "\nআপনার টেলিগ্রাম চ্যাট লিস্টটি চেক করুন।");
+      tg.close();
+    } else {
+      tg.showAlert("❌ " + resData.message);
+      watchBtn.disabled = false;
+      watchBtn.textContent = "আবার চেষ্টা করুন";
+    }
+  } catch (err) {
+    alert("ভিডিও ডেলিভারি নিতে সমস্যা হয়েছে।");
+    watchBtn.disabled = false;
+    watchBtn.textContent = "আবার চেষ্টা করুন";
   }
-}
-
-// ---------- ভিডিও সরাসরি চালু করা — কোনো wait বা বাধ্যতামূলক অ্যাড নেই ----------
-function renderVideo(videoUrl) {
-  videoSection.style.display = "block";
-  errorBox.style.display = "none";
-
-  const rawUrl = videoUrl || currentVideoUrl;
-  const finalUrl = normalizeVideoUrl(rawUrl);
-
-  if (!finalUrl) {
-    statusEl.textContent = "❌ এই ভিডিও চালানো যাচ্ছে না।";
-    errorBox.style.display = "block";
-    return;
-  }
-
-  statusEl.textContent = "🎉 ভিডিওটি উপভোগ করুন!";
-  currentVideoUrl = finalUrl;
-  player.src = finalUrl;
-  player.load();
-
-  player.play().catch(() => {
-    player.muted = true;
-    player.play().catch(() => {
-      // এখানে কিছু করার দরকার নেই, নিচের error listener সঠিক কারণ দেখাবে
-    });
-  });
-}
-
-// ---------- ফুল স্ক্রিন হ্যান্ডলিং (ভিডিও এলিমেন্ট + Telegram Mini App দুটোই) ----------
-fullscreenBtn.onclick = () => {
-  // Telegram এর নিজস্ব Mini App fullscreen (Bot API 8.0+ এ সাপোর্ট করলে পুরো স্ক্রিন নেবে)
-  if (typeof tg.requestFullscreen === "function") {
-    try { tg.requestFullscreen(); } catch (e) {}
-  }
-
-  // ভিডিও এলিমেন্টকে ব্রাউজার ফুলস্ক্রিন এপিআই দিয়ে ফুলস্ক্রিন করা (ক্রস-ব্রাউজার ফলব্যাক সহ)
-  if (player.requestFullscreen) {
-    player.requestFullscreen();
-  } else if (player.webkitRequestFullscreen) {
-    player.webkitRequestFullscreen(); // Chrome/Android WebView
-  } else if (player.webkitEnterFullscreen) {
-    player.webkitEnterFullscreen(); // iOS Safari - ভিডিও ট্যাগের নিজস্ব ফুলস্ক্রিন
-  } else if (player.msRequestFullscreen) {
-    player.msRequestFullscreen();
-  }
-};
-
-// ভিডিও এলিমেন্টের নিজস্ব error ইভেন্ট - "ভিডিও খুলছে না" এর আসল কারণ এখানেই ধরা পড়ে
-player.addEventListener("error", () => {
-  statusEl.textContent = "❌ এই ভিডিওর লিংক থেকে প্লে করা যাচ্ছে না।";
-  errorBox.style.display = "block";
-});
-
-// ---------- বোনাস অ্যাড: সম্পূর্ণ ঐচ্ছিক, চ্যানেলকে সাপোর্ট করার জন্য — মূল ভিডিওর সাথে সম্পর্কহীন ----------
-bonusBtn.onclick = async () => {
-  if (!AdController) {
-    await callApi(`/api/bonus-ad/${VIDEO_ID}`);
-    bonusBtn.textContent = "❤️ ধন্যবাদ সাপোর্ট করার জন্য!";
-    bonusBtn.disabled = true;
-    return;
-  }
-  try {
-    await AdController.show();
-    await callApi(`/api/bonus-ad/${VIDEO_ID}`);
-    bonusBtn.textContent = "❤️ ধন্যবাদ সাপোর্ট করার জন্য!";
-    bonusBtn.disabled = true;
-  } catch (e) {}
-};
-
-async function init() {
-  let videoInfo = await fetchVideoInfo();
-
-  if (!videoInfo) {
-    videoInfo = {
-      id: "demo",
-      title: "Sample Video Player",
-      thumbnail_url: "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800&q=80",
-      video_url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
-    };
-  }
-
-  currentVideoUrl = videoInfo.video_url;
-  document.title = videoInfo.title;
-  titleEl.textContent = videoInfo.title;
-
-  if (videoInfo.thumbnail_url) {
-    thumbEl.src = videoInfo.thumbnail_url;
-    thumbEl.onload = () => { thumbEl.style.display = "inline-block"; };
-    thumbEl.onerror = () => { thumbEl.style.display = "none"; };
-  }
-
-  statusEl.textContent = "ভিডিওটি দেখতে নিচের বাটনে ক্লিক করুন";
-}
-
-// ---------- ইউজার নিজে ক্লিক করে ভিডিও দেখা শুরু করে — এই ক্লিকেই অ্যাড ট্রিগার হয় ----------
-watchBtn.onclick = async () => {
-  watchBtn.disabled = true;
-  watchBtn.textContent = "লোড হচ্ছে...";
-
-  try {
-    await showMonetagAd();
-  } catch (e) {
-    // অ্যাড লোড না হলে বা কোনো কারণে fail করলেও ভিডিও আটকে রাখা হবে না
-    console.log("Ad skipped/failed:", e);
-  }
-
-  watchSection.style.display = "none";
-  renderVideo(currentVideoUrl);
 };
 
 init();

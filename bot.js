@@ -1,21 +1,10 @@
-// bot.js - অ্যাডমিন প্রাইভেটে /addvideo দিলে ধাপে ধাপে
-// টাইটেল/থাম্বনেইল/ভিডিও URL নিয়ে ডাটাবেজে সেভ করে, ভিডিওর প্রথম কয়েক
-// সেকেন্ডের একটা প্রিভিউ ক্লিপ কেটে সেটা চ্যানেলে অটো-পোস্ট করে
-
 require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { randomUUID } = require("crypto");
-const { Readable } = require("stream");
-const { pipeline } = require("stream/promises");
 const TelegramBotModule = require("node-telegram-bot-api");
-// CJS/ESM কম্প্যাটিবিলিটি ফিক্স (Render Node v24 environment এর জন্য)
 const TelegramBot = TelegramBotModule.default || TelegramBotModule;
-
-const ffmpegPath = require("ffmpeg-static");
-const ffmpeg = require("fluent-ffmpeg");
-ffmpeg.setFfmpegPath(ffmpegPath);
 
 const { addVideo, getVideo } = require("./db");
 
@@ -23,7 +12,6 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const WEBAPP_BASE_URL = process.env.WEBAPP_BASE_URL;
 const PREMIUM_CONTACT = process.env.PREMIUM_CONTACT || "@SecretVault_BD";
-const PREVIEW_SECONDS = Number(process.env.PREVIEW_SECONDS || 3); // ২-৪ সেকেন্ডের মধ্যে যেকোনো একটা মান দিতে পারেন
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
   .split(",")
   .map((x) => Number(x.trim()))
@@ -34,8 +22,6 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 
-// ⬇️ পোলিং এর বদলে webhook ব্যবহার করা হচ্ছে — এতে Render এর deploy-overlap এর সময়
-// একাধিক instance একসাথে getUpdates কল করার কারণে যে "409 Conflict" আসে, সেটা আর হবে না।
 const bot = new TelegramBot(BOT_TOKEN, { polling: false });
 
 const WEBHOOK_PATH = `/bot${BOT_TOKEN}`;
@@ -45,10 +31,9 @@ if (WEBAPP_BASE_URL) {
     .setWebHook(webhookUrl)
     .then(() => console.log(`✅ Webhook সেট হয়েছে -> ${webhookUrl}`))
     .catch((err) => console.error("❌ Webhook সেট করতে সমস্যা:", err.message));
-} else {
-  console.error("❌ .env এ WEBAPP_BASE_URL সেট করা নেই, webhook সেট করা যাচ্ছে না।");
 }
-const userState = {}; // প্রতিটা ইউজারের /addvideo কথোপকথনের ধাপ ট্র্যাক করার জন্য
+
+const userState = {};
 
 function isAdmin(userId) {
   return ADMIN_IDS.includes(userId);
@@ -80,47 +65,57 @@ bot.on("message", async (msg) => {
   if (state.step === "thumbnail") {
     state.thumbnailUrl = msg.text.trim();
     state.step = "video";
-    bot.sendMessage(msg.chat.id, "🎥 আসল ভিডিওর URL দাও:");
+    bot.sendMessage(
+      msg.chat.id,
+      "🎥 আসল ভিডিওটি এই চ্যাটে **Upload / Forward** করো (অথবা File ID পাঠাও):"
+    );
     return;
   }
 
   if (state.step === "video") {
-    state.videoUrl = msg.text.trim();
+    // যদি ফাইল/ভিডিও সরাসরি আপলোড করা হয়
+    if (msg.video) {
+      state.fileId = msg.video.file_id;
+    } else if (msg.document && msg.document.mime_type?.startsWith("video/")) {
+      state.fileId = msg.document.file_id;
+    } else if (msg.text) {
+      state.fileId = msg.text.trim();
+    } else {
+      bot.sendMessage(msg.chat.id, "❌ অনুগ্রহ করে একটি ভিডিও ফাইল আপলোড বা ফরওয়ার্ড করুন।");
+      return;
+    }
 
     const processingMsg = await bot.sendMessage(
       msg.chat.id,
-      "⏳ ভিডিও সেভ হচ্ছে এবং প্রিভিউ ক্লিপ তৈরি হচ্ছে, একটু অপেক্ষা করো..."
+      "⏳ ভিডিও ডাটাবেজে সেভ হচ্ছে এবং চ্যানেলে পোস্ট করা হচ্ছে..."
     );
 
     try {
-      // PostgreSQL Async Support
+      // DataBase এ URL এর বদলে fileId সেভ হবে
       const videoId = await addVideo({
         title: state.title,
         thumbnailUrl: state.thumbnailUrl,
-        videoUrl: state.videoUrl,
+        videoUrl: state.fileId, // file_id stored as videoUrl
       });
 
-      const posted = await postToChannel(videoId);
+      const posted = await postToChannel(videoId, state.fileId, state.title, state.thumbnailUrl);
 
       if (posted) {
         bot.sendMessage(
           msg.chat.id,
-          `✅ ভিডিও যোগ হয়েছে এবং প্রিভিউসহ চ্যানেলে পোস্ট হয়ে গেছে!\nVideo ID: \`${videoId}\``,
+          `✅ ভিডিও সফলভাবে যোগ হয়েছে!\nVideo ID: \`${videoId}\``,
           { parse_mode: "Markdown" }
         );
       } else {
         bot.sendMessage(
           msg.chat.id,
-          `⚠️ ভিডিও ডাটাবেজে সেভ হয়েছে (Video ID: \`${videoId}\`), কিন্তু চ্যানেলে পোস্ট করতে ব্যর্থ হয়েছে। Render Logs চেক করো।`,
+          `⚠️ ভিডিও সেভ হয়েছে (ID: \`${videoId}\`), কিন্তু চ্যানেলে পোস্ট ব্যর্থ হয়েছে।`,
           { parse_mode: "Markdown" }
         );
       }
     } catch (error) {
       console.error("Error adding video:", error);
-      bot.sendMessage(
-        msg.chat.id,
-        "❌ ভিডিও সেভ বা প্রিভিউ তৈরি করতে সমস্যা হয়েছে। কনসোল লগ চেক করো।"
-      );
+      bot.sendMessage(msg.chat.id, "❌ ভিডিও সেভ করতে সমস্যা হয়েছে।");
     } finally {
       bot.deleteMessage(msg.chat.id, processingMsg.message_id).catch(() => {});
     }
@@ -129,130 +124,12 @@ bot.on("message", async (msg) => {
   }
 });
 
-// ---------- ভিডিও URL থেকে আগে লোকাল টেম্প ফাইলে ডাউনলোড করা ----------
-// ffmpeg-static বাইনারি সরাসরি HTTPS URL থেকে পড়তে গেলে Render এর কন্টেইনারে
-// SIGSEGV দিয়ে ক্র্যাশ করছিল। তাই Node দিয়ে আগে ডাউনলোড করে, ffmpeg কে শুধু
-// লোকাল ফাইল দেওয়া হচ্ছে — এতে ffmpeg এর নিজের HTTPS হ্যান্ডলিং এড়ানো যায়।
-async function downloadToTemp(videoUrl, videoId) {
-  const srcPath = path.join(os.tmpdir(), `src_${videoId}_${randomUUID()}.mp4`);
-  console.log(`[preview] ভিডিও ডাউনলোড করা হচ্ছে -> ${videoUrl}`);
-
-  const res = await fetch(videoUrl, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      Accept: "*/*",
-    },
-  });
-  if (!res.ok || !res.body) {
-    throw new Error(`ভিডিও ডাউনলোড ব্যর্থ, HTTP status: ${res.status}`);
-  }
-
-  await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(srcPath));
-
-  const stats = fs.statSync(srcPath);
-  console.log(`[preview] ✅ ডাউনলোড শেষ -> ${srcPath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
-  return srcPath;
-}
-
-// ---------- আসল ভিডিও URL থেকে প্রথম কয়েক সেকেন্ডের ছোট প্রিভিউ ক্লিপ বানানো ----------
-// আগে "stream copy" (-c copy) দিয়ে ট্রাই করা হয় — এটা ডিকোড/এনকোড ছাড়াই শুধু কেটে
-// কপি করে, তাই RAM/CPU খুবই কম লাগে (Render Free tier এর ৫১২MB এর জন্য উপযুক্ত)।
-// এটা fail করলে, অনেক হালকা সেটিংসে (ছোট resolution, single thread) রি-এনকোড ট্রাই করা হয়।
-function runFfmpeg(inputPath, outputPath, outputOptions) {
-  return new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
-      .setStartTime(0)
-      .duration(PREVIEW_SECONDS)
-      .outputOptions(outputOptions)
-      .on("start", (cmd) => console.log("[preview] ffmpeg command:", cmd))
-      .on("stderr", (line) => console.log("[preview][ffmpeg stderr]", line))
-      .on("error", (err) => reject(err))
-      .on("end", () => resolve(outputPath))
-      .save(outputPath);
-  });
-}
-
-async function createPreviewClip(videoUrl, videoId) {
-  const outputPath = path.join(
-    os.tmpdir(),
-    `preview_${videoId}_${randomUUID()}.mp4`
-  );
-
-  console.log(`[preview] শুরু হচ্ছে -> videoId=${videoId}, source=${videoUrl}`);
-
-  let srcPath = null;
-  try {
-    srcPath = await downloadToTemp(videoUrl, videoId);
-  } catch (dlErr) {
-    console.error(`[preview] ডাউনলোড ব্যর্থ -> videoId=${videoId}:`, dlErr.message);
-    throw dlErr;
-  }
-
-  try {
-    // ধাপ ১: হালকা stream-copy পদ্ধতি (কোনো ডিকোড/এনকোড লাগে না)
-    try {
-      console.log("[preview] stream-copy পদ্ধতিতে ট্রাই করা হচ্ছে...");
-      await runFfmpeg(srcPath, outputPath, ["-c copy", "-movflags +faststart"]);
-      console.log(`[preview] ✅ stream-copy দিয়ে সফলভাবে তৈরি হয়েছে -> ${outputPath}`);
-      return outputPath;
-    } catch (err) {
-      console.error(`[preview] stream-copy ব্যর্থ হয়েছে -> videoId=${videoId}:`, err.message);
-    }
-
-    // ধাপ ২: stream-copy fail করলে, কম রিসোর্স খরচ করে ছোট resolution এ রি-এনকোড ট্রাই করা হয়
-    try {
-      console.log("[preview] হালকা রি-এনকোড পদ্ধতিতে ট্রাই করা হচ্ছে...");
-      await runFfmpeg(srcPath, outputPath, [
-        "-c:v libx264",
-        "-c:a aac",
-        "-preset ultrafast",
-        "-threads 1",
-        "-vf scale=480:-2",
-        "-movflags +faststart",
-      ]);
-      console.log(`[preview] ✅ রি-এনকোড দিয়ে সফলভাবে তৈরি হয়েছে -> ${outputPath}`);
-      return outputPath;
-    } catch (err2) {
-      console.error(`[preview] রি-এনকোডও ব্যর্থ হয়েছে -> videoId=${videoId}:`, err2.message);
-      throw err2;
-    }
-  } finally {
-    if (srcPath) fs.unlink(srcPath, () => {}); // ডাউনলোড করা মূল ফাইল পরিষ্কার করা
-  }
-}
-
-async function postToChannel(videoId) {
-  console.log(`[postToChannel] শুরু -> videoId=${videoId}, CHANNEL_ID=${CHANNEL_ID}`);
-
-  const video = await getVideo(videoId);
-  if (!video) {
-    console.error("[postToChannel] Video not found for ID:", videoId);
-    return;
-  }
-
-  // db.js থেকে PostgreSQL snake_case (video_url) অথবা camelCase (videoUrl) —
-  // যেকোনো ফরম্যাটে আসতে পারে, তাই দুটোই চেক করা হচ্ছে
-  const videoUrl = video.videoUrl || video.video_url;
-  const title = video.title;
-
-  console.log(`[postToChannel] video অবজেক্ট:`, JSON.stringify(video));
-
-  if (!videoUrl) {
-    console.error("[postToChannel] ❌ videoUrl খালি! DB থেকে সঠিক ফিল্ড আসছে না।");
-    return;
-  }
-
-  if (!CHANNEL_ID) {
-    console.error("[postToChannel] ❌ CHANNEL_ID .env এ সেট করা নেই! পোস্ট করা সম্ভব না।");
-    return;
-  }
+// ---------- প্রাইভেট চ্যানেলে পোস্ট করা ----------
+async function postToChannel(videoId, fileId, title, thumbnailUrl) {
+  if (!CHANNEL_ID) return false;
 
   const directWebAppUrl = `https://t.me/norrcartonbot/noor?startapp=${videoId}`;
 
-  // HTML parse mode ব্যবহার করা হচ্ছে Markdown এর বদলে — কারণ Markdown এ '_' '*' '['
-  // এই চিহ্নগুলো থাকলে (যেমন @SecretVault_BD এর আন্ডারস্কোর) পার্সিং এরর হয়।
-  // HTML মোডে শুধু <, >, & escape করলেই যথেষ্ট, তাই এটা অনেক বেশি নিরাপদ।
   function escapeHtml(str) {
     return String(str)
       .replace(/&/g, "&amp;")
@@ -263,8 +140,8 @@ async function postToChannel(videoId) {
   const caption =
     `🎬 <b>${escapeHtml(title)}</b>\n\n` +
     `━━━━━━━━━━━━━━━\n` +
-    `▶️  উপরে প্রিভিউ দেখুন\n` +
-    `🎁  সম্পূর্ণ ভিডিও ১০০% ফ্রি\n` +
+    `🎁 সম্পূর্ণ ভিডিও ইনবক্সে পেতে নিচের বাটনে চাপ দিন\n` +
+    `⚡ ২ ঘণ্টার জন্য দেখার সুযোগ পাবেন\n` +
     `━━━━━━━━━━━━━━━\n\n` +
     `💎 Premium কনটেন্টের জন্য\n` +
     `👉 ${escapeHtml(PREMIUM_CONTACT)}`;
@@ -273,54 +150,66 @@ async function postToChannel(videoId) {
     inline_keyboard: [
       [
         {
-          text: "▶️ Watch Full Video",
+          text: "▶️ Get Full Video",
           url: directWebAppUrl,
         },
       ],
     ],
   };
 
-  let previewPath = null;
-  let posted = false;
   try {
-    previewPath = await createPreviewClip(videoUrl, videoId);
-
-    console.log("[postToChannel] sendVideo কল করা হচ্ছে...");
-    await bot.sendVideo(CHANNEL_ID, previewPath, {
-      caption,
-      parse_mode: "HTML",
-      reply_markup: replyMarkup,
-      supports_streaming: true,
-    });
-    console.log("[postToChannel] ✅ sendVideo সফল হয়েছে।");
-    posted = true;
-  } catch (e) {
-    console.error(
-      "[postToChannel] প্রিভিউ ক্লিপ পাঠাতে সমস্যা হয়েছে, ফলব্যাক টেক্সট পাঠানো হচ্ছে। কারণ:",
-      e.message
-    );
-    // ফলব্যাক: প্রিভিউ ক্লিপ বানানো/পাঠানো সম্ভব না হলে অন্তত টেক্সট মেসেজ যাবে,
-    // যাতে ভিডিওটা চ্যানেলে অনুপস্থিত না থাকে
-    try {
-      console.log("[postToChannel] fallback sendMessage কল করা হচ্ছে...");
+    // থাম্বনেইল ছবি থাকলে ফটো হিসেবে চ্যানেলে যাবে
+    if (thumbnailUrl) {
+      await bot.sendPhoto(CHANNEL_ID, thumbnailUrl, {
+        caption,
+        parse_mode: "HTML",
+        reply_markup: replyMarkup,
+      });
+    } else {
       await bot.sendMessage(CHANNEL_ID, caption, {
         parse_mode: "HTML",
         reply_markup: replyMarkup,
       });
-      console.log("[postToChannel] ✅ fallback sendMessage সফল হয়েছে।");
-      posted = true;
-    } catch (err2) {
-      console.error("[postToChannel] ❌ fallback sendMessage ও ব্যর্থ হয়েছে:", err2.message);
     }
-  } finally {
-    if (previewPath) {
-      fs.unlink(previewPath, () => {}); // টেম্প ফাইল পরিষ্কার করা
-    }
+    return true;
+  } catch (e) {
+    console.error("[postToChannel] Failed:", e.message);
+    return false;
   }
+}
 
-  return posted;
+// ---------- ইউজারের ইনবক্সে ভিডিও সেন্ড করা ও ২ ঘণ্টা পর ডিলিট ----------
+async function sendVideoToUser(userId, videoId) {
+  const video = await getVideo(videoId);
+  if (!video) throw new Error("Video not found");
+
+  const fileId = video.videoUrl || video.video_url;
+  const title = video.title;
+
+  // protect_content: true দিয়ে ভিডিও পাঠানো (ডাউনলোড/ফরওয়ার্ড ব্লক)
+  const sentMsg = await bot.sendVideo(userId, fileId, {
+    protect_content: true,
+    caption: `🎬 <b>${title}</b>\n\n⚠️ এই ভিডিওটি ২ ঘণ্টার জন্য আপনার ইনবক্সে থাকবে। ২ ঘণ্টা পর স্বয়ংক্রিয়ভাবে ডিলিট হয়ে যাবে।`,
+    parse_mode: "HTML",
+  });
+
+  // ২ ঘণ্টা (৭২০০০ মি.সে.) পর ডিলিট করার টাইমার
+  const TWO_HOURS = 2 * 60 * 60 * 1000;
+  setTimeout(async () => {
+    try {
+      await bot.deleteMessage(userId, sentMsg.message_id);
+      await bot.sendMessage(
+        userId,
+        `⌛ "${title}" ভিডিওটির ২ ঘণ্টার সময়সীমা শেষ হওয়ায় ইনবক্স থেকে মুছে ফেলা হয়েছে।`
+      );
+    } catch (err) {
+      console.error("Message delete failed:", err.message);
+    }
+  }, TWO_HOURS);
+
+  return true;
 }
 
 console.log("🤖 Admin bot running (webhook mode)...");
 
-module.exports = { bot, WEBHOOK_PATH };
+module.exports = { bot, WEBHOOK_PATH, sendVideoToUser };
